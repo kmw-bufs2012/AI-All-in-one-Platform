@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { translateToKorean } from "@/lib/deepl";
+import { translateToKorean } from "@/lib/azure";
 
 export async function POST(request: NextRequest) {
   let body: { texts?: unknown };

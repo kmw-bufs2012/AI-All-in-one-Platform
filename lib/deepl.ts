@@ -7,7 +7,7 @@ export interface TranslationResult {
   message: string | null;
 }
 
-export async function translateToKorean(texts: string[]): Promise<TranslationResult> {
+export async function translateToKoreanDeepL(texts: string[]): Promise<TranslationResult> {
   const key = process.env.DEEPL_API_KEY;
   if (!key) {
     return {

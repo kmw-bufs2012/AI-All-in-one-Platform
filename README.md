@@ -10,7 +10,7 @@
 - **영상 모드** — 비동기 영상 생성과 진행 상태 폴링, 생성 전 비용 견적을 제공합니다.
 - **음성 모드** — 텍스트 음성 변환(TTS)을 제공하며 모델별 음성 선택이 가능합니다.
 - **모델 선택 UI** — 모델명 옆에 LMM 모델은 "LMM", 무검열 모델은 "무검열"로 표시됩니다.
-- **모델 설명 표시** — 모델 선택창 바로 아래에 원문(영문)을 먼저 표시하고, DeepL API 번역 결과를 아래 패널에 표시합니다.
+- **모델 설명 표시** — 모델 선택창 바로 아래에 원문(영문)을 먼저 표시하고, Azure AI Translator 또는 DeepL 번역 결과를 아래 패널에 표시합니다.
 - **작업 기록** — 수행한 작업(모드, 모델, 프롬프트, 첨부, 사용량, 비용, 결과, 시각)이 저장되며 모드/날짜/모델로 필터링하여 조회할 수 있습니다.
 - **비용 계산** — 작업 시점의 단가 정보와 사용량을 기록하여 비용을 산출합니다. Venice.ai가 단가를 제공하지 않는 경우 "비용 정보 없음"으로 표시됩니다.
 - **프롬프트 관리** — 프롬프트를 이름과 함께 저장·삭제하고, 채팅 입력창에 다시 불러올 수 있습니다.
@@ -31,7 +31,10 @@
 | 변수 | 필수 | 설명 |
 | --- | --- | --- |
 | `VENICE_API_KEY` | 예 | Venice.ai API 키. venice.ai 계정에서 발급합니다. |
-| `DEEPL_API_KEY` | 아니요 | DeepL 번역 API 키. 설정하지 않으면 모델 설명이 원문만 표시됩니다. 무료 키는 `:fx` 접미사를 사용합니다. |
+| `AZURE_TRANSLATOR_KEY` | 아니요 | Azure AI Translator 구독 키. 설정하면 번역에 Azure가 우선 사용됩니다. |
+| `AZURE_TRANSLATOR_REGION` | 아니요 | Azure AI Translator 리소스 리전(예: `koreacentral`). |
+| `AZURE_TRANSLATOR_ENDPOINT` | 아니요 | Azure AI Translator 커스텀 엔드포인트. 기본값은 `https://api.cognitive.microsofttranslator.com`입니다. |
+| `DEEPL_API_KEY` | 아니요 | DeepL 번역 API 키. Azure가 설정되지 않았을 때 사용됩니다. 무료 키는 `:fx` 접미사를 사용합니다. |
 | `APP_USERNAME` / `APP_PASSWORD` | 아니요 | 최초 로그인 계정 생성에 사용됩니다. 설정하지 않으면 계정이 생성되지 않으며 로그인 페이지에서 안내가 표시됩니다. |
 | `SESSION_SECRET` | 아니요 | 세션 쿠키 서명 키. 설정하지 않으면 `APP_PASSWORD`로 대체됩니다. |
 | `DATABASE_PATH` | 아니요 | SQLite 파일 경로. 기본값은 `./data/app.db`입니다. |
