@@ -6,7 +6,12 @@ import { extractId, extractStatus, readableError } from "@/lib/extract";
 import { resolveUploadPath, mimeFromPath } from "@/lib/attachments";
 
 async function resolveImageDataUrl(id: string): Promise<string | null> {
-  const dir = resolveUploadPath(path.join("attachments", id));
+  let dir: string | null = null;
+  try {
+    dir = resolveUploadPath(path.join("attachments", id));
+  } catch {
+    return null;
+  }
   if (!dir) return null;
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
   const entry = entries.find((item) => item.isFile());

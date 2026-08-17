@@ -5,6 +5,7 @@ import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
 import { AttachStrip, FileChip, ModelChip, ModelDetail, SendButton } from "@/components/studio-ui";
 import { recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
+import { resolveVideoAttachmentPolicy } from "@/lib/attachment-policy";
 
 const POLL_INTERVAL_MS = 5000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -31,11 +32,18 @@ export default function VideoPage() {
     };
   }, []);
 
+  const policy = resolveVideoAttachmentPolicy(models.selected);
+  const maxStartImages = policy.startImage.max;
+
   async function pickStartImage(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
     setError("");
+    if (!supportsStartImage) {
+      setError("이 모델은 시작 이미지를 지원하지 않습니다.");
+      return;
+    }
     try {
       const uploaded = await uploadFiles([file]);
       setStartImage(uploaded[0] ?? null);
@@ -164,7 +172,7 @@ export default function VideoPage() {
     }
   }
 
-  const supportsStartImage = models.selected?.supportsVideoInput ?? false;
+  const supportsStartImage = policy.startImage.allowed;
 
   return (
     <div className="studio">
@@ -229,7 +237,7 @@ export default function VideoPage() {
           <div className="dock-row">
             <ModelChip hook={models} />
             <FileChip
-              label={`시작 이미지 ${startImage ? 1 : 0}/1`}
+              label={`시작 이미지 ${startImage ? 1 : 0}/${maxStartImages}`}
               accept="image/*"
               disabled={!supportsStartImage}
               onPick={pickStartImage}

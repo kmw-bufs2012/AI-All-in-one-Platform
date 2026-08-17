@@ -1,3 +1,5 @@
+import { modelDescription } from "./model-descriptions";
+
 export interface VoiceInfo {
   id: string;
   name: string;
@@ -17,15 +19,57 @@ export interface NormalizedModel {
   lmm: boolean;
   /**
    * Venice API의 model_spec.capabilities.supportsMultipleImages. 채팅 메시지 하나에
-   * 이미지를 여러 장 보냈을 때, false면 마지막 이미지 하나만 실제로 모델에 전달되고
-   * 나머지는 무시됩니다(Venice 공식 문서 기준). 첨부 개수 제한 계산에 사용합니다.
+   * 이미지를 여러 장 보냈을 때, false면 마지막 이미지가 담긴 메시지의 이미지만
+   * 실제로 모델에 전달됩니다(공식 문서: "For single-image vision models, only the
+   * last image-containing message retains its images").
    */
   supportsMultipleImages: boolean;
+  /**
+   * model_spec.capabilities.maxImages. supportsMultipleImages가 true일 때만
+   * 존재하는, 요청당 최대 이미지 개수(공식 스키마 예시: 10).
+   */
+  maxImages: number;
+  /**
+   * model_spec.capabilities.supportsVideoInput. 채팅 모델이 동영상(video_url)
+   * 입력을 직접 지원하는지 여부입니다. 영상 생성 모델의 시작 이미지 지원
+   * (supportsVideoInput, constraints.model_type)과는 다른 축이라 이름이
+   * 겹치지만 출처가 다릅니다.
+   */
+  chatVideoInput: boolean;
+  /**
+   * model_spec.capabilities.maxVideos. supportsVideoInput이 true일 때만 존재하는,
+   * 채팅 요청당 최대 동영상 첨부 개수(공식 스키마 예시: 4). 단, API 차원에서
+   * "At most 3 videos may be provided in one request" 상한이 있어 min(maxVideos, 3)으로
+   * 적용합니다.
+   */
+  maxVideos: number;
+  /** model_spec.capabilities.supportsAudioInput. 채팅 모델의 오디오 입력 지원 여부. */
+  supportsAudioInput: boolean;
+  /**
+   * model_spec.supportsStyleReferences. 이미지 생성 모델이 style_references
+   * (POST /image/generate)를 받는지 여부.
+   */
+  supportsStyleReferences: boolean;
+  /**
+   * model_spec.maxStyleReferences. style_references 최대 개수. 필드가 없으면
+   * 공식 스키마의 multi-edit 기본값(3)을 사용합니다.
+   */
+  maxStyleReferences: number;
   contextWindow: number | null;
   voices: VoiceInfo[];
   defaultVoice: string | null;
   pricing: ModelPricing | null;
+  /**
+   * 영상 생성 모델의 시작 이미지(QueueVideoRequest.image_url) 지원 여부.
+   * 공식 스키마의 VideoModelConstraints.model_type이 "image-to-video"인지로
+   * 판정합니다(legacy 필드와 모델 ID 패턴은 폴백).
+   */
   supportsVideoInput: boolean;
+  /**
+   * 영상 생성 모델의 VideoModelConstraints.model_type:
+   * "image-to-video" | "text-to-video" | "video".
+   */
+  videoModelType: string | null;
   supportedFormats: string[];
   defaultFormat: string | null;
 }
@@ -107,6 +151,25 @@ export function normalizeModel(raw: unknown): NormalizedModel {
 
   const supportsMultipleImages = asBool(capabilities.supportsMultipleImages);
 
+  // 공식 스키마: capabilities.maxImages는 supportsMultipleImages일 때만 존재.
+  // 이미지 개수 제한이 없는 fallback은 앱 안전 상한(10)을 씁니다.
+  const maxImages = asNumber(capabilities.maxImages) ?? 10;
+
+  // 공식 스키마: capabilities.supportsVideoInput / maxVideos (채팅 동영상 첨부).
+  const chatVideoInput = asBool(capabilities.supportsVideoInput);
+  const maxVideos = asNumber(capabilities.maxVideos) ?? 3;
+
+  const supportsAudioInput = asBool(capabilities.supportsAudioInput);
+
+  // 공식 스키마: model_spec.supportsStyleReferences / maxStyleReferences (이미지 생성).
+  const supportsStyleReferences = asBool(spec.supportsStyleReferences)
+    || asBool(spec.supports_style_references);
+  const maxStyleReferences = asNumber(spec.maxStyleReferences)
+    ?? asNumber(spec.max_style_references)
+    ?? 3;
+
+  const videoModelType = asString(constraints.model_type) || null;
+
   const uncensored = asBool(spec.uncensored)
     || asBool(model.uncensored)
     || (Array.isArray(spec.model_sets) && (spec.model_sets as unknown[]).includes("uncensored"));
@@ -122,25 +185,37 @@ export function normalizeModel(raw: unknown): NormalizedModel {
     ? (rawFormats as unknown[]).filter((v): v is string => typeof v === "string")
     : [];
 
-  // video 모델(type: "video")의 VideoModelConstraints.video_input — 이미지를 넣어
-  // 영상을 만드는 image-to-video 지원 여부입니다. 채팅 모델의 supportsVideoInput
-  // 캐퍼빌리티(동영상 파일을 직접 이해하는지)와는 다른 축이라 이름은 같지만 출처가 다릅니다.
-  const supportsVideoInput = asBool(constraints.video_input)
+  // 영상 생성 모델(type: "video")의 VideoModelConstraints.model_type — 이미지를
+  // 넣어 영상을 만드는 image-to-video 지원 여부입니다(공식 스키마 기준).
+  // 채팅 모델의 chatVideoInput 캐퍼빌리티(동영상 파일을 직접 이해하는지)와는
+  // 다른 축이라 출처가 다르며, 이름이 같지만 각자 사용처가 다릅니다.
+  const supportsVideoInput = videoModelType === "image-to-video"
+    || asBool(constraints.video_input)
     || asBool(spec.supportsVideoInput)
     || /image-to-video|i2v/i.test(asString(model.id));
 
   return {
     id: asString(model.id),
     name: asString(spec.name) || asString(model.name) || asString(model.id),
-    description: asString(spec.description) || asString(model.description),
+    // 공식 문서 기반 정적 한글 설명이 있으면 우선 사용하고, 없으면 API 설명을 사용합니다.
+    description: modelDescription(asString(model.id))
+      || asString(spec.description)
+      || asString(model.description),
     uncensored,
     lmm,
     supportsMultipleImages,
+    maxImages,
+    chatVideoInput,
+    maxVideos,
+    supportsAudioInput,
+    supportsStyleReferences,
+    maxStyleReferences,
     contextWindow,
     voices: voicesResult.voices,
     defaultVoice: voicesResult.defaultVoice,
     pricing: extractPricing(spec, model),
     supportsVideoInput,
+    videoModelType,
     supportedFormats,
     defaultFormat: asString(spec.default_format) || null,
   };

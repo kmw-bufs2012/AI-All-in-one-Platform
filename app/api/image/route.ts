@@ -26,7 +26,12 @@ export async function POST(request: NextRequest) {
 
   const styleReferences = [];
   for (const id of styleImageIds) {
-    const dir = resolveUploadPath(path.join("attachments", id));
+    let dir: string | null = null;
+    try {
+      dir = resolveUploadPath(path.join("attachments", id));
+    } catch {
+      continue;
+    }
     if (!dir) continue;
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
     const entry = entries.find((item) => item.isFile());

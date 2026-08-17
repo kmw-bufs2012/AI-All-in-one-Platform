@@ -73,7 +73,7 @@ export async function proxyChatCompletion(payload: Record<string, unknown>): Pro
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-  }, 120000);
+  }, 300000);
 }
 
 export async function generateImage(payload: Record<string, unknown>): Promise<Response> {

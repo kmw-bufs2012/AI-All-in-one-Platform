@@ -45,13 +45,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `이미지는 최대 ${MAX_IMAGES}개까지 첨부할 수 있습니다.` }, { status: 400 });
   }
   if (videoCount > MAX_VIDEO_FILES) {
-    return NextResponse.json({ error: "동영상은 최대 1개까지 첨부할 수 있습니다." }, { status: 400 });
+    return NextResponse.json({ error: `동영상은 최대 ${MAX_VIDEO_FILES}개까지 첨부할 수 있습니다.` }, { status: 400 });
   }
   if (docCount > MAX_DOCS) {
-    return NextResponse.json({ error: "문서는 최대 1개까지 첨부할 수 있습니다." }, { status: 400 });
+    return NextResponse.json({ error: `문서는 최대 ${MAX_DOCS}개까지 첨부할 수 있습니다.` }, { status: 400 });
   }
 
-  ensureUploadDirs();
+  let root: string;
+  try {
+    ensureUploadDirs();
+    root = uploadRoot();
+  } catch (error) {
+    console.error("[attachments] upload root unavailable:", error);
+    return NextResponse.json({
+      error: "파일을 저장할 공간을 준비하지 못했습니다. 서버에 쓰기 가능한 저장소(UPLOAD_DIR 등)가 있는지 확인해 주세요.",
+    }, { status: 500 });
+  }
 
   const saved: Array<{ id: string; kind: string; name: string; size: number; mime: string; url: string }> = [];
   for (const file of files) {
@@ -59,21 +68,28 @@ export async function POST(request: NextRequest) {
     if (!kind) continue;
     const sizeLimit = kind === "image" ? MAX_IMAGE_BYTES : kind === "video" ? MAX_VIDEO_BYTES : MAX_DOC_BYTES;
     if (file.size > sizeLimit) {
-      const limitText = kind === "video" ? "50MB" : "10MB";
+      const limitText = kind === "video" ? "50MB" : kind === "doc" ? "25MB" : "10MB";
       return NextResponse.json({
         error: `${file.name} 파일의 크기가 ${limitText}를 초과합니다.`,
       }, { status: 400 });
     }
     const id = randomUUID();
-    const dir = path.join(uploadRoot(), "attachments", id);
-    await mkdir(dir, { recursive: true });
-    const buffer = Buffer.from(await file.arrayBuffer());
-    await writeFile(path.join(dir, sanitizeFileName(file.name)), buffer);
+    const dir = path.join(root, "attachments", id);
+    try {
+      await mkdir(dir, { recursive: true });
+      const buffer = Buffer.from(await file.arrayBuffer());
+      await writeFile(path.join(dir, sanitizeFileName(file.name)), buffer);
+    } catch (error) {
+      console.error("[attachments] save failed:", error);
+      return NextResponse.json({
+        error: "파일 저장에 실패했습니다. 서버에 쓰기 가능한 저장 공간이 있는지 확인해 주세요.",
+      }, { status: 500 });
+    }
     saved.push({
       id,
       kind,
       name: sanitizeFileName(file.name),
-      size: buffer.length,
+      size: file.size,
       mime: file.type || "application/octet-stream",
       url: `/api/files/attachments/${id}/${encodeURIComponent(sanitizeFileName(file.name))}`,
     });

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { proxyChatCompletion, politeVeniceError, readJson } from "@/lib/venice";
-import { resolveUploadPath, mimeFromPath, MAX_IMAGES, MAX_DOCS } from "@/lib/attachments";
+import { resolveUploadPath, mimeFromPath, MAX_IMAGES, MAX_VIDEO_FILES, MAX_DOCS } from "@/lib/attachments";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -13,7 +13,12 @@ interface OutgoingPart {
 
 async function resolveAttachmentFile(id: string): Promise<{ filePath: string; mime: string; name: string } | null> {
   if (!UUID_PATTERN.test(id)) return null;
-  const dir = resolveUploadPath(path.join("attachments", id));
+  let dir: string | null = null;
+  try {
+    dir = resolveUploadPath(path.join("attachments", id));
+  } catch {
+    return null;
+  }
   if (!dir) return null;
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
   const fileEntry = entries.find((entry) => entry.isFile());
@@ -31,7 +36,7 @@ export async function POST(request: NextRequest) {
   let body: {
     model?: unknown;
     messages?: unknown;
-    attachments?: { images?: unknown; docs?: unknown };
+    attachments?: { images?: unknown; docs?: unknown; videos?: unknown };
     frames?: unknown;
   };
   try {
@@ -63,6 +68,11 @@ export async function POST(request: NextRequest) {
   const docIds: string[] = Array.isArray(body.attachments?.docs)
     ? (body.attachments.docs as unknown[]).filter((id): id is string => typeof id === "string").slice(0, MAX_DOCS)
     : [];
+  // video_url 콘텐츠 파트는 API 차원에서 "At most 3 videos" 제한이 있어
+  // MAX_VIDEO_FILES(3)로 잘라냅니다.
+  const videoIds: string[] = Array.isArray(body.attachments?.videos)
+    ? (body.attachments.videos as unknown[]).filter((id): id is string => typeof id === "string").slice(0, MAX_VIDEO_FILES)
+    : [];
   const frames: string[] = Array.isArray(body.frames)
     ? (body.frames as unknown[]).filter((value): value is string =>
         typeof value === "string" && value.startsWith("data:image/")).slice(0, 12)
@@ -81,6 +91,12 @@ export async function POST(request: NextRequest) {
     if (!file) continue;
     const dataUrl = await toDataUrl(file.filePath, file.mime);
     parts.push({ type: "image_url", image_url: { url: dataUrl } });
+  }
+  for (const id of videoIds) {
+    const file = await resolveAttachmentFile(id);
+    if (!file) continue;
+    const dataUrl = await toDataUrl(file.filePath, file.mime);
+    parts.push({ type: "video_url", video_url: { url: dataUrl } });
   }
   for (const frame of frames) {
     parts.push({ type: "image_url", image_url: { url: frame } });

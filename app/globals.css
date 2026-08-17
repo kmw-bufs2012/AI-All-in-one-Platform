@@ -259,6 +259,19 @@ select {
   padding-right: 32px;
 }
 
+/*
+ * 다크 모드에서 네이티브 select 드롭다운 목록이 시스템 기본(흰 배경)으로 열려
+ * 밝은 글자가 보이지 않는 문제를 막습니다. option에 테마 배경/글자색을 명시합니다.
+ */
+select option {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+select option:disabled {
+  color: var(--text-faint);
+}
+
 label {
   display: block;
   font-weight: 600;

@@ -6,7 +6,12 @@ import { resolveUploadPath, mimeFromPath } from "@/lib/attachments";
 export async function GET(request: NextRequest, context: { params: Promise<{ slug: string[] }> }) {
   const { slug } = await context.params;
   const relative = slug.map(decodeURIComponent).join("/");
-  const filePath = resolveUploadPath(relative);
+  let filePath: string | null = null;
+  try {
+    filePath = resolveUploadPath(relative);
+  } catch {
+    return NextResponse.json({ error: "파일 저장소를 사용할 수 없습니다." }, { status: 500 });
+  }
   if (!filePath) {
     return NextResponse.json({ error: "파일 경로가 올바르지 않습니다." }, { status: 400 });
   }

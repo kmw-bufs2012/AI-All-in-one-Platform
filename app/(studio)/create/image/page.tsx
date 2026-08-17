@@ -37,7 +37,7 @@ export default function ImagePage() {
   const [costLine, setCostLine] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
 
-  const policy = resolveImageAttachmentPolicy();
+  const policy = resolveImageAttachmentPolicy(models.selected);
   const maxRefs = policy.reference.max;
   const supportsRefs = policy.reference.allowed;
 
@@ -46,9 +46,20 @@ export default function ImagePage() {
     event.target.value = "";
     if (files.length === 0) return;
     setError("");
+    if (!supportsRefs) {
+      setError("이 모델은 참조 이미지를 지원하지 않습니다.");
+      return;
+    }
     if (refs.length + files.length > maxRefs) {
       setError(`참조 이미지는 최대 ${maxRefs}개까지 첨부할 수 있습니다.`);
       return;
+    }
+    // 공식 스키마: style_references 이미지 1장은 8MB 미만이어야 합니다.
+    for (const file of files) {
+      if (file.size >= 8 * 1024 * 1024) {
+        setError("참조 이미지는 8MB 미만만 첨부할 수 있습니다.");
+        return;
+      }
     }
     try {
       const uploaded = await uploadFiles(files);

@@ -6,7 +6,9 @@ import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
 import { ModelChip, ModelDetail, SelectChip, SendButton } from "@/components/studio-ui";
 import { recordJob } from "@/lib/client-api";
+import { resolveAudioAttachmentPolicy } from "@/lib/attachment-policy";
 
+// 공식 스키마 기준 TTS 요청(CreateSpeechRequestSchema)의 입력 최대 길이입니다.
 const MAX_CHARS = 4096;
 
 interface AudioResult {
@@ -25,6 +27,9 @@ export default function AudioPage() {
 
   const voices = models.selected?.voices ?? [];
   const activeVoice = voice || models.selected?.defaultVoice || voices[0]?.id || "";
+  // TTS 모델은 공식 스키마상 첨부(이미지/영상/텍스트 파일)를 지원하지 않습니다.
+  // 텍스트만 입력받으므로 모든 첨부 개수는 0으로 고정됩니다.
+  const policy = resolveAudioAttachmentPolicy();
 
   async function generate() {
     const text = input.trim();
@@ -156,6 +161,9 @@ export default function AudioPage() {
               />
             ) : null}
             <span className="dock-spacer" />
+            <span className="muted" style={{ fontSize: 11.5 }}>
+              첨부 불가 · 이미지 {policy.image.max}/{policy.image.max} · 동영상 {policy.video.max}/{policy.video.max} · 파일 {policy.doc.max}/{policy.doc.max}
+            </span>
             <span className="muted" style={{ fontSize: 11.5 }}>
               {input.length.toLocaleString()} / {MAX_CHARS.toLocaleString()}자
             </span>
