@@ -6,3 +6,5 @@ uploads/
 .env*
 !.env.example
 *.tsbuildinfo
+server.log
+
