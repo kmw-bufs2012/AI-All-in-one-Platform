@@ -1,0 +1,110 @@
+const IMAGE_KEYS = ["images", "image", "data", "b64_json", "base64", "url"];
+const WRAPPER_KEYS = ["data", "result", "output", "generation"];
+const ID_KEYS = ["queue_id", "id", "request_id", "task_id", "job_id", "generation_id", "video_id", "uuid"];
+const STATUS_KEYS = ["status", "state"];
+const COST_KEYS = ["estimated_cost", "cost", "price", "total_cost", "amount", "total"];
+const CURRENCY_KEYS = ["currency", "unit", "denomination"];
+const FAILURE_PATTERN = /FAIL|ERROR|REJECT|CANCEL|BLOCK|MODERAT|DENIED|ABORT/i;
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function walk(value: unknown, keys: string[]): unknown | undefined {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = walk(entry, keys);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  if (!isObject(value)) return undefined;
+  for (const key of keys) {
+    if (key in value) return value[key];
+  }
+  for (const wrapper of WRAPPER_KEYS) {
+    if (wrapper in value) {
+      const found = walk(value[wrapper], keys);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+export function extractImages(body: unknown): string[] {
+  const found = walk(body, IMAGE_KEYS);
+  const format = typeof found === "object" && found !== null && typeof (found as { format?: unknown }).format === "string"
+    ? (found as { format: string }).format
+    : "webp";
+  const results: string[] = [];
+  const collect = (entry: unknown): void => {
+    if (typeof entry === "string") {
+      if (entry.startsWith("data:") || /^https?:\/\//.test(entry)) {
+        results.push(entry);
+      } else {
+        results.push(`data:image/${format};base64,${entry}`);
+      }
+      return;
+    }
+    if (isObject(entry)) {
+      const data = entry.b64_json ?? entry.data ?? entry.base64 ?? entry.url;
+      if (typeof data === "string") {
+        if (data.startsWith("data:") || /^https?:\/\//.test(data)) {
+          results.push(data);
+        } else {
+          results.push(`data:image/${format};base64,${data}`);
+        }
+      }
+    }
+  };
+  if (Array.isArray(found)) {
+    found.forEach(collect);
+  } else if (found !== undefined) {
+    collect(found);
+  }
+  return results;
+}
+
+export function extractId(body: unknown): string | null {
+  const found = walk(body, ID_KEYS);
+  return typeof found === "string" && found ? found : null;
+}
+
+export function extractStatus(body: unknown): string | null {
+  const found = walk(body, STATUS_KEYS);
+  return typeof found === "string" && found ? found : null;
+}
+
+export function extractCost(body: unknown): { amount: number; currency?: string } | undefined {
+  const found = walk(body, COST_KEYS);
+  if (typeof found === "number" && Number.isFinite(found)) {
+    const currency = walk(body, CURRENCY_KEYS);
+    return { amount: found, currency: typeof currency === "string" ? currency : undefined };
+  }
+  return undefined;
+}
+
+export function isFailureStatus(status: string): boolean {
+  return FAILURE_PATTERN.test(status);
+}
+
+export function isVideoResponse(response: Response): boolean {
+  const contentType = response.headers.get("content-type") || "";
+  return contentType.toLowerCase().startsWith("video/");
+}
+
+export function readableError(body: unknown): string {
+  if (typeof body === "string" && body) return body.slice(0, 500);
+  if (isObject(body)) {
+    const candidates = ["error", "message", "detail", "error_message"];
+    for (const key of candidates) {
+      const value = body[key];
+      if (typeof value === "string" && value) return value.slice(0, 500);
+      if (isObject(value)) {
+        const message = value.error ?? value.message;
+        if (typeof message === "string" && message) return message.slice(0, 500);
+      }
+    }
+  }
+  return "요청 처리에 실패했습니다.";
+}
