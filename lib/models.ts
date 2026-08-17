@@ -15,12 +15,16 @@ export interface NormalizedModel {
   description: string;
   uncensored: boolean;
   lmm: boolean;
+  /**
+   * Venice API의 model_spec.capabilities.supportsMultipleImages. 채팅 메시지 하나에
+   * 이미지를 여러 장 보냈을 때, false면 마지막 이미지 하나만 실제로 모델에 전달되고
+   * 나머지는 무시됩니다(Venice 공식 문서 기준). 첨부 개수 제한 계산에 사용합니다.
+   */
+  supportsMultipleImages: boolean;
   contextWindow: number | null;
   voices: VoiceInfo[];
   defaultVoice: string | null;
   pricing: ModelPricing | null;
-  supportsStyleReferences: boolean;
-  maxStyleReferences: number;
   supportsVideoInput: boolean;
   supportedFormats: string[];
   defaultFormat: string | null;
@@ -101,6 +105,8 @@ export function normalizeModel(raw: unknown): NormalizedModel {
     || asBool(spec.vision)
     || asBool(model.supportsVision);
 
+  const supportsMultipleImages = asBool(capabilities.supportsMultipleImages);
+
   const uncensored = asBool(spec.uncensored)
     || asBool(model.uncensored)
     || (Array.isArray(spec.model_sets) && (spec.model_sets as unknown[]).includes("uncensored"));
@@ -116,13 +122,12 @@ export function normalizeModel(raw: unknown): NormalizedModel {
     ? (rawFormats as unknown[]).filter((v): v is string => typeof v === "string")
     : [];
 
+  // video 모델(type: "video")의 VideoModelConstraints.video_input — 이미지를 넣어
+  // 영상을 만드는 image-to-video 지원 여부입니다. 채팅 모델의 supportsVideoInput
+  // 캐퍼빌리티(동영상 파일을 직접 이해하는지)와는 다른 축이라 이름은 같지만 출처가 다릅니다.
   const supportsVideoInput = asBool(constraints.video_input)
     || asBool(spec.supportsVideoInput)
     || /image-to-video|i2v/i.test(asString(model.id));
-
-  const maxStyleReferences = asNumber(constraints.maxStyleReferences)
-    ?? asNumber(spec.maxStyleReferences)
-    ?? 10;
 
   return {
     id: asString(model.id),
@@ -130,12 +135,11 @@ export function normalizeModel(raw: unknown): NormalizedModel {
     description: asString(spec.description) || asString(model.description),
     uncensored,
     lmm,
+    supportsMultipleImages,
     contextWindow,
     voices: voicesResult.voices,
     defaultVoice: voicesResult.defaultVoice,
     pricing: extractPricing(spec, model),
-    supportsStyleReferences: asBool(spec.supportsStyleReferences),
-    maxStyleReferences,
     supportsVideoInput,
     supportedFormats,
     defaultFormat: asString(spec.default_format) || null,

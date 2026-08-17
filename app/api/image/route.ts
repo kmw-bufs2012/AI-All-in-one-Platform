@@ -7,7 +7,7 @@ import { dataUrlToBuffer, saveGeneratedFile } from "@/lib/storage";
 import { resolveUploadPath, mimeFromPath } from "@/lib/attachments";
 
 export async function POST(request: NextRequest) {
-  let body: { model?: unknown; prompt?: unknown; styleImageIds?: unknown };
+  let body: { model?: unknown; prompt?: unknown; styleImageIds?: unknown; width?: unknown; height?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -40,6 +40,14 @@ export async function POST(request: NextRequest) {
   const payload: Record<string, unknown> = { model, prompt };
   if (styleReferences.length > 0) {
     payload.style_references = styleReferences;
+  }
+
+  // 비율을 고르지 않으면 두 값 모두 생략되어 기존과 동일하게 모델 기본값으로 생성됩니다.
+  const width = typeof body.width === "number" && Number.isFinite(body.width) ? Math.round(body.width) : null;
+  const height = typeof body.height === "number" && Number.isFinite(body.height) ? Math.round(body.height) : null;
+  if (width !== null && height !== null && width > 0 && height > 0) {
+    payload.width = width;
+    payload.height = height;
   }
 
   try {
