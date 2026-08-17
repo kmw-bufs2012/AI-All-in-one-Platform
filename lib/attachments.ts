@@ -1,4 +1,5 @@
 import path from "node:path";
+import os from "node:os";
 import { mkdirSync } from "node:fs";
 
 export const MAX_IMAGES = 10;
@@ -40,13 +41,43 @@ export function sanitizeFileName(name: string): string {
   return cleaned.slice(0, 120) || "file";
 }
 
+let cachedUploadRoot: string | null = null;
+
+/*
+ * Vercel 같은 서버리스 환경에서는 배포 디렉터리(process.cwd())가 읽기 전용이라
+ * "./uploads" 아래에 mkdir 하면 ENOENT/EROFS 로 죽습니다. 쓰기 가능한 디렉터리를
+ * 순서대로 시도해 처음 성공한 곳을 프로세스 수명 동안 고정해 씁니다.
+ * 로컬 개발(README에 문서화된 ./uploads)은 그대로 동작하고, 서버리스에서는
+ * 자동으로 OS 임시 디렉터리(/tmp)로 넘어갑니다.
+ */
+function uploadRootCandidates(): string[] {
+  const candidates: string[] = [];
+  if (process.env.UPLOAD_DIR) candidates.push(process.env.UPLOAD_DIR);
+  candidates.push(path.join(process.cwd(), "uploads"));
+  candidates.push(path.join(os.tmpdir(), "ai-all-in-one-platform-uploads"));
+  return candidates;
+}
+
 export function uploadRoot(): string {
-  return path.join(process.cwd(), "uploads");
+  if (cachedUploadRoot) return cachedUploadRoot;
+  const candidates = uploadRootCandidates();
+  for (const candidate of candidates) {
+    try {
+      mkdirSync(path.join(candidate, "attachments"), { recursive: true });
+      mkdirSync(path.join(candidate, "generated"), { recursive: true });
+      cachedUploadRoot = candidate;
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  // 마지막 후보(OS 임시 디렉터리)까지 실패하면 그대로 반환해 호출부에서 오류가 드러나게 합니다.
+  cachedUploadRoot = candidates[candidates.length - 1];
+  return cachedUploadRoot;
 }
 
 export function ensureUploadDirs(): void {
-  mkdirSync(path.join(uploadRoot(), "attachments"), { recursive: true });
-  mkdirSync(path.join(uploadRoot(), "generated"), { recursive: true });
+  uploadRoot();
 }
 
 export function resolveUploadPath(relativePath: string): string | null {

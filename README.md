@@ -73,5 +73,7 @@ npm run dev
 ## 참고 사항
 
 - 디자인과 색상은 [multi-video-studio](https://github.com/kmw-bufs2012/multi-video-studio), [multi-image-studio](https://github.com/kmw-bufs2012/multi-image-studio), [venice-allchat](https://github.com/kmw-bufs2012/venice-allchat) 프로젝트의 팔레트·폰트·카드 형태를 차용하여 작성되었습니다.
-- 첨부 파일과 생성 결과는 `uploads/` 디렉터리에 저장되며, 데이터베이스 파일은 `data/` 디렉터리에 저장됩니다. 두 디렉터리는 버전 관리 대상에서 제외되어 있습니다.
+- 첨부 파일과 생성 결과는 기본적으로 `uploads/` 디렉터리에 저장되며, 데이터베이스 파일은 `data/` 디렉터리에 저장됩니다. 두 디렉터리는 버전 관리 대상에서 제외되어 있습니다.
+- **서버리스 배포(Vercel 등) 유의 사항**: 배포 디렉터리는 읽기 전용이라 `uploads/`에 쓸 수 없습니다. `lib/attachments.ts`가 이를 감지해 자동으로 OS 임시 디렉터리(`/tmp`)로 대체하므로 오류 없이 동작하지만, `/tmp`는 함수 인스턴스가 재활용될 때만 유지되는 임시 공간이라 항상 보장되지는 않습니다. 업로드한 파일이 이후 요청(예: 참조 이미지로 이미지 생성)에서 간헐적으로 사라질 수 있다는 뜻입니다. 안정적인 첨부 보관이 필요하면 `UPLOAD_DIR`을 외부 스토리지(예: Vercel Blob, S3)를 가리키도록 확장하는 것을 권장합니다. `DATABASE_PATH`도 같은 이유로 서버리스에서는 기본값이 메모리 DB로 대체되어(재시작 시 초기화) 영속되지 않으니, 운영 배포라면 외부 SQLite 파일 경로나 별도 DB를 지정하세요.
 - 모델 목록은 매 요청마다 Venice.ai API에서 실시간으로 불러오며, 목록이 하드코딩되어 있지 않습니다.
+- 채팅/이미지 페이지의 이미지·동영상·문서 첨부 가능 개수는 선택한 모델의 Venice API `capabilities`(`supportsVision`, `supportsMultipleImages`)를 기준으로 자동으로 정해집니다. 자세한 근거는 `lib/attachment-policy.ts` 주석을 참고하세요.

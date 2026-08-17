@@ -6,13 +6,13 @@ import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
 import { AttachStrip, EmptyState, FileChip, Lightbox, ModelChip, ModelDetail, SendButton } from "@/components/studio-ui";
 import {
-  MAX_IMAGES,
   MAX_VIDEO_BYTES,
   extractVideoFrames,
   recordJob,
   uploadFiles,
   type AttachedFile,
 } from "@/lib/client-api";
+import { resolveChatAttachmentPolicy } from "@/lib/attachment-policy";
 import { computeChatCost, estimateImageTokens, estimateTokens, formatCost, formatUsage } from "@/lib/cost";
 
 interface ChatMessage {
@@ -25,6 +25,7 @@ interface ChatMessage {
 
 export default function ChatPage() {
   const models = useModels("text");
+  const policy = resolveChatAttachmentPolicy(models.selected);
   const [messages, setMessages] = useStudioState<ChatMessage[]>("chat:messages", []);
   const [input, setInput] = useStudioState<string>("chat:input", "");
   const [attachments, setAttachments] = useStudioState<AttachedFile[]>("chat:attachments", []);
@@ -63,9 +64,13 @@ export default function ChatPage() {
     event.target.value = "";
     if (files.length === 0) return;
     setError("");
+    if (!policy.image.allowed) {
+      setError("선택한 모델은 이미지를 인식하지 못합니다.");
+      return;
+    }
     const images = attachments.filter((item) => item.kind === "image");
-    if (images.length + files.length > MAX_IMAGES) {
-      setError(`이미지는 최대 ${MAX_IMAGES}개까지 첨부할 수 있습니다.`);
+    if (images.length + files.length > policy.image.max) {
+      setError(`이 모델은 이미지를 최대 ${policy.image.max}개까지 첨부할 수 있습니다.`);
       return;
     }
     try {
@@ -81,6 +86,10 @@ export default function ChatPage() {
     event.target.value = "";
     if (!file) return;
     setError("");
+    if (!policy.video.allowed) {
+      setError("선택한 모델은 동영상(이미지)을 인식하지 못합니다.");
+      return;
+    }
     if (attachments.some((item) => item.kind === "video")) {
       setError("동영상은 최대 1개까지 첨부할 수 있습니다.");
       return;
@@ -134,7 +143,7 @@ export default function ChatPage() {
       try {
         const blob = await fetch(videoAtt.url).then((response) => response.blob());
         const videoFile = new File([blob], videoAtt.name, { type: videoAtt.mime });
-        frames = await extractVideoFrames(videoFile);
+        frames = await extractVideoFrames(videoFile, policy.frameCount);
         framesCount = frames.length;
       } catch {
         frames = [];
@@ -339,23 +348,31 @@ export default function ChatPage() {
           <div className="dock-row">
             <ModelChip hook={models} />
             <FileChip
-              label={`이미지 ${imageCount}/${MAX_IMAGES}`}
+              label={`이미지 ${imageCount}/${policy.image.max}`}
               accept="image/*"
               multiple
+              disabled={!policy.image.allowed}
               onPick={pickImages}
-              title="이미지 첨부"
+              title={policy.image.allowed ? "이미지 첨부" : "이 모델은 이미지를 인식하지 못합니다"}
             />
-            <FileChip label={`동영상 ${hasVideo ? 1 : 0}/1`} accept="video/*" onPick={pickVideo} title="동영상 첨부" />
             <FileChip
-              label={`문서 ${hasDoc ? 1 : 0}/1`}
+              label={`동영상 ${hasVideo ? 1 : 0}/${policy.video.max}`}
+              accept="video/*"
+              disabled={!policy.video.allowed}
+              onPick={pickVideo}
+              title={policy.video.allowed ? "동영상 첨부" : "이 모델은 동영상(이미지)을 인식하지 못합니다"}
+            />
+            <FileChip
+              label={`문서 ${hasDoc ? 1 : 0}/${policy.doc.max}`}
               accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
+              disabled={!policy.doc.allowed}
               onPick={pickDoc}
               title="문서 첨부"
             />
             <span className="dock-spacer" />
-            {models.selected && !models.selected.lmm && attachments.some((item) => item.kind !== "doc") ? (
+            {policy.singleImageNote ? (
               <span className="muted" style={{ fontSize: 11.5 }}>
-                이 모델은 이미지를 읽지 못합니다
+                {policy.singleImageNote}
               </span>
             ) : null}
             <SendButton disabled={sending || (!input.trim() && attachments.length === 0)} onClick={send} label="전송" />

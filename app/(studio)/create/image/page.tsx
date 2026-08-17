@@ -13,7 +13,8 @@ import {
   SelectChip,
   SendButton,
 } from "@/components/studio-ui";
-import { MAX_IMAGES, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
+import { recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
+import { resolveImageAttachmentPolicy } from "@/lib/attachment-policy";
 import { formatCost } from "@/lib/cost";
 
 /** 비율을 고르지 않으면 폭·높이를 보내지 않아 모델 기본값으로 생성됩니다. */
@@ -36,8 +37,9 @@ export default function ImagePage() {
   const [costLine, setCostLine] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
 
-  const maxRefs = models.selected?.maxStyleReferences ?? MAX_IMAGES;
-  const supportsRefs = models.selected?.supportsStyleReferences ?? false;
+  const policy = resolveImageAttachmentPolicy();
+  const maxRefs = policy.reference.max;
+  const supportsRefs = policy.reference.allowed;
 
   async function pickRefs(event: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
