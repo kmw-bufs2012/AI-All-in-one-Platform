@@ -140,9 +140,13 @@ body {
   margin: 0;
   background-color: var(--bg);
   color: var(--text);
-  /* Inter 는 라틴 문자만 담당하고, 한글은 OS에 설치된 본문용 서체로 이어 받습니다. */
-  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Pretendard,
-    "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  /*
+   * next/font/google(Inter)은 빌드 타임에 fonts.gstatic.com 접속이 필요해
+   * 배포 환경에 따라 빌드가 실패할 수 있어 쓰지 않습니다. OS 시스템 폰트만으로
+   * 라틴/한글 모두 무난하게 커버합니다.
+   */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Pretendard, "Apple SD Gothic Neo",
+    "Noto Sans KR", "Malgun Gothic", Inter, Roboto, sans-serif;
   font-size: 14px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;

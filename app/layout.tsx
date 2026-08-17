@@ -1,13 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
-
-const inter = Inter({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
-  variable: "--font-sans",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: {
@@ -52,13 +44,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
    * 아니므로 <html> 에 한해 경고를 억제합니다.
    */
   return (
-    <html
-      lang="ko"
-      className={inter.variable}
-      data-theme="dark"
-      style={{ colorScheme: "dark" }}
-      suppressHydrationWarning
-    >
+    <html lang="ko" data-theme="dark" style={{ colorScheme: "dark" }} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
