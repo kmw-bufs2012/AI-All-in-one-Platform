@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { NormalizedModel } from "@/lib/models";
 import { modelDisplayLabel } from "@/lib/models";
 import { estimateTokens, estimateImageTokens, computeChatCost, formatCost, formatUsage } from "@/lib/cost";
+import { MODEL_DOCS } from "@/lib/modelDocs";
 
 type Mode = "chat" | "image" | "video" | "audio";
 type Theme = "system" | "light" | "dark";
@@ -14,6 +15,19 @@ const MAX_IMAGES = 10;
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 const VIDEO_POLL_INTERVAL_MS = 5000;
 const VIDEO_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+const CHAT_STREAM_STALL_MS = 45000;
+
+async function readWithStallTimeout<T>(reader: ReadableStreamDefaultReader<T>, timeoutMs: number): Promise<ReadableStreamReadResult<T>> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("응답이 지연되어 중단되었습니다. 잠시 후 다시 시도해 주세요.")), timeoutMs);
+  });
+  try {
+    return await Promise.race([reader.read(), timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
 
 interface AttachedFile {
   id: string;
@@ -393,10 +407,12 @@ export default function StudioPage() {
     let assistantText = "";
     let realUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null = null;
 
+    const chatAbort = new AbortController();
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: chatAbort.signal,
         body: JSON.stringify({
           model: model.id,
           messages: [...history, { role: "user", content: text }],
@@ -415,7 +431,14 @@ export default function StudioPage() {
       const decoder = new TextDecoder();
       let buffer = "";
       for (;;) {
-        const { done, value } = await reader.read();
+        let done: boolean | undefined;
+        let value: Uint8Array | undefined;
+        try {
+          ({ done, value } = await readWithStallTimeout(reader, CHAT_STREAM_STALL_MS));
+        } catch (stallError) {
+          chatAbort.abort();
+          throw stallError;
+        }
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
@@ -786,6 +809,7 @@ export default function StudioPage() {
           {mode === "chat" ? (
             <section>
               <ModelSection
+                mode="chat"
                 models={models.chat}
                 selected={selected.chat}
                 onSelect={(id) => setSelected((prev) => ({ ...prev, chat: id }))}
@@ -877,6 +901,7 @@ export default function StudioPage() {
           {mode === "image" ? (
             <section>
               <ModelSection
+                mode="image"
                 models={models.image}
                 selected={selected.image}
                 onSelect={(id) => setSelected((prev) => ({ ...prev, image: id }))}
@@ -944,6 +969,7 @@ export default function StudioPage() {
           {mode === "video" ? (
             <section>
               <ModelSection
+                mode="video"
                 models={models.video}
                 selected={selected.video}
                 onSelect={(id) => setSelected((prev) => ({ ...prev, video: id }))}
@@ -1006,6 +1032,7 @@ export default function StudioPage() {
           {mode === "audio" ? (
             <section>
               <ModelSection
+                mode="audio"
                 models={models.audio}
                 selected={selected.audio}
                 onSelect={(id) => setSelected((prev) => ({ ...prev, audio: id }))}
@@ -1068,19 +1095,38 @@ export default function StudioPage() {
 }
 
 function ModelSection({
+  mode,
   models,
   selected,
   onSelect,
   translation,
 }: {
+  mode: Mode;
   models: ModelState;
   selected: string;
   onSelect: (id: string) => void;
   translation: TranslationState;
 }) {
   const model = models.models?.find((item) => item.id === selected) ?? null;
+  const doc = MODEL_DOCS[mode];
   return (
     <div className="model-section">
+      <div className="model-doc-panel">
+        <div className="model-doc-intro">{doc.intro}</div>
+        {doc.sections.map((section) => (
+          <div key={section.title} className="model-doc-section">
+            <span className="desc-label">{section.title}</span>
+            <ul>
+              {section.items.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ))}
+        <div className="model-doc-source">
+          출처: <a href={doc.sourceUrl} target="_blank" rel="noreferrer">{doc.sourceLabel}</a>
+        </div>
+      </div>
       <div>
         <label htmlFor={`model-select-${model?.id ?? "none"}`}>모델 선택</label>
         {models.loading ? (
