@@ -4,7 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
-import { AttachStrip, EmptyState, FileChip, Lightbox, ModelChip, ModelDetail, SendButton } from "@/components/studio-ui";
+import {
+  AttachStrip,
+  EmptyState,
+  FileChip,
+  Lightbox,
+  ModelChip,
+  ModelDetail,
+  SendButton,
+  type LightboxContent,
+} from "@/components/studio-ui";
 import {
   MAX_VIDEO_BYTES,
   extractVideoFrames,
@@ -35,7 +44,7 @@ export default function ChatPage() {
   const [attachments, setAttachments] = useStudioState<AttachedFile[]>("chat:attachments", []);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
-  const [lightbox, setLightbox] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<LightboxContent>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -212,6 +221,11 @@ export default function ChatPage() {
 
     let assistantText = "";
     let realUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null = null;
+    // NanoGPT는 stream_options.include_usage 요청 시 마지막 청크의 usage 안에
+    // 실제 청구액을 함께 실어 보내는 경우가 있습니다(공식 문서: "Every API
+    // response includes a cost field"). 있으면 카탈로그 추정 대신 그 값을 씁니다.
+    let realCost: number | null = null;
+    let realCostCurrency: string | null = null;
     const streamStartedAt = Date.now();
 
     try {
@@ -276,11 +290,24 @@ export default function ChatPage() {
             try {
               const parsed = JSON.parse(data) as {
                 choices?: Array<{ delta?: { content?: string } }>;
-                usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+                usage?: {
+                  prompt_tokens?: number;
+                  completion_tokens?: number;
+                  total_tokens?: number;
+                  cost?: number;
+                  total_cost?: number;
+                  cost_usd?: number;
+                };
+                cost?: number;
               };
               const delta = parsed.choices?.[0]?.delta?.content;
               if (typeof delta === "string") assistantText += delta;
               if (parsed.usage) realUsage = parsed.usage;
+              const costCandidate = parsed.usage?.cost ?? parsed.usage?.total_cost ?? parsed.usage?.cost_usd ?? parsed.cost;
+              if (typeof costCandidate === "number" && Number.isFinite(costCandidate)) {
+                realCost = costCandidate;
+                realCostCurrency = "USD";
+              }
               setMessages((prev) => {
                 const copy = [...prev];
                 const last = copy[copy.length - 1];
@@ -318,8 +345,10 @@ export default function ChatPage() {
         totalTokens: promptTokens + completionTokens,
         estimated: !realUsage,
       };
-      const computed = computeChatCost(usage, model.pricing);
-      const costLine = `${formatUsage(usage)} · ${formatCost(computed.cost, computed.currency)}`;
+      const estimated = computeChatCost(usage, model.pricing);
+      const computed = realCost !== null ? { cost: realCost, currency: realCostCurrency } : estimated;
+      const costLabel = computed.cost === null ? "" : realCost !== null ? "청구된 비용 " : "추정 비용 ";
+      const costLine = `${formatUsage(usage)} · ${costLabel}${formatCost(computed.cost, computed.currency)}`;
 
       setMessages((prev) => {
         const copy = [...prev];
@@ -344,6 +373,7 @@ export default function ChatPage() {
         unitPrice: model.pricing,
         cost: computed.cost,
         currency: computed.currency,
+        costSource: realCost !== null ? "actual" : computed.cost !== null ? "estimated" : null,
         status: "completed",
         result: { kind: "text", text: assistantText },
       });
@@ -399,17 +429,42 @@ export default function ChatPage() {
                           {message.attachments.map((item) => {
                             if (item.kind === "image") {
                               return (
-                                <img key={item.id} src={item.url} alt={item.name} onClick={() => setLightbox(item.url)} />
+                                <img
+                                  key={item.id}
+                                  src={item.url}
+                                  alt={item.name}
+                                  onClick={() => setLightbox({ url: item.url, kind: "image", name: item.name, size: item.size, mime: item.mime })}
+                                />
                               );
                             }
                             if (item.kind === "video") {
-                              return <video key={item.id} src={item.url} controls preload="metadata" />;
+                              return (
+                                <span key={item.id} className="bubble-video-wrap">
+                                  <video src={item.url} controls preload="metadata" />
+                                  <button
+                                    type="button"
+                                    className="bubble-video-expand"
+                                    aria-label={`${item.name} 크게 보기`}
+                                    title="크게 보기"
+                                    onClick={() =>
+                                      setLightbox({ url: item.url, kind: "video", name: item.name, size: item.size, mime: item.mime })
+                                    }
+                                  >
+                                    <Icon name="expand" size={12} />
+                                  </button>
+                                </span>
+                              );
                             }
                             return (
-                              <span key={item.id} className="bubble-attach-chip">
-                                <Icon name="doc" size={12} />
+                              <button
+                                key={item.id}
+                                type="button"
+                                className="bubble-attach-chip"
+                                onClick={() => setLightbox({ url: item.url, kind: item.kind, name: item.name, size: item.size, mime: item.mime })}
+                              >
+                                <Icon name={item.kind === "audio" ? "audio" : "doc"} size={12} />
                                 {item.name}
-                              </span>
+                              </button>
                             );
                           })}
                         </div>
@@ -498,7 +553,7 @@ export default function ChatPage() {
         </div>
       </div>
 
-      <Lightbox src={lightbox} onClose={() => setLightbox(null)} />
+      <Lightbox content={lightbox} onClose={() => setLightbox(null)} />
     </div>
   );
 }

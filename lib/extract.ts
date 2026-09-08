@@ -1,5 +1,5 @@
 const IMAGE_KEYS = ["images", "image", "data", "b64_json", "base64", "url"];
-const WRAPPER_KEYS = ["data", "result", "output", "generation"];
+const WRAPPER_KEYS = ["data", "result", "output", "generation", "usage", "pricing"];
 const ID_KEYS = ["queue_id", "id", "request_id", "task_id", "job_id", "generation_id", "video_id", "uuid"];
 /* NanoGPT 영상 생성은 runId 를 돌려주고 그 값으로 /video/status 를 폴링합니다. */
 const RUN_ID_KEYS = ["runId", "run_id", "requestId", "request_id", "queue_id", "id", "task_id", "job_id"];
@@ -7,7 +7,13 @@ const RUN_ID_KEYS = ["runId", "run_id", "requestId", "request_id", "queue_id", "
 const VIDEO_URL_KEYS = ["videoUrl", "video_url", "outputUrl", "output_url", "resultUrl", "result_url"];
 const GENERIC_URL_KEYS = ["url", "video", "output", "result"];
 const STATUS_KEYS = ["status", "state"];
-const COST_KEYS = ["estimated_cost", "cost", "price", "total_cost", "amount", "total"];
+/*
+ * NanoGPT 공식 문서: "Every API response includes a cost field showing what
+ * you were charged for that request" — 이미지 생성 응답은 cost_usd, 영상
+ * 생성/상태 조회 응답은 cost, 채팅은 스트리밍 마지막 청크의 usage 안에
+ * cost/total_cost로 실린다고 알려져 있어 후보 키를 폭넓게 봅니다.
+ */
+const COST_KEYS = ["estimated_cost", "cost", "cost_usd", "price", "total_cost", "amount", "total"];
 const CURRENCY_KEYS = ["currency", "unit", "denomination"];
 const FAILURE_PATTERN = /FAIL|ERROR|REJECT|CANCEL|BLOCK|MODERAT|DENIED|ABORT/i;
 

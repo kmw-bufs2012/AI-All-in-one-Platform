@@ -20,6 +20,8 @@ export interface JobRow {
   unit_price: string | null;
   cost: number | null;
   currency: string | null;
+  /** "actual"(NanoGPT 응답에 실린 실제 청구액) | "estimated"(카탈로그 단가로 계산한 추정치) | null(레거시 행). */
+  cost_source: string | null;
   status: string;
   result: string | null;
   created_at: string;
@@ -78,6 +80,7 @@ export function getDb(): DatabaseSync {
         unit_price TEXT,
         cost REAL,
         currency TEXT,
+        cost_source TEXT,
         status TEXT NOT NULL,
         result TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -90,10 +93,23 @@ export function getDb(): DatabaseSync {
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `);
+    ensureCostSourceColumn(db);
     seedInitialUser(db);
     globalThis.__allInOneDb = db;
   }
   return globalThis.__allInOneDb;
+}
+
+/*
+ * cost_source는 기존 jobs 테이블에 나중에 추가된 컬럼이라, 이미 만들어진
+ * 데이터베이스 파일에는 CREATE TABLE IF NOT EXISTS만으로는 추가되지 않습니다.
+ * PRAGMA로 존재를 확인한 뒤 없을 때만 ALTER TABLE로 더합니다.
+ */
+function ensureCostSourceColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(jobs)").all() as unknown as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "cost_source")) {
+    db.exec("ALTER TABLE jobs ADD COLUMN cost_source TEXT");
+  }
 }
 
 export function findUserByUsername(db: DatabaseSync, username: string): UserRow | undefined {
@@ -109,12 +125,13 @@ export function insertJob(db: DatabaseSync, job: {
   unitPrice: unknown;
   cost: number | null;
   currency: string | null;
+  costSource: string | null;
   status: string;
   result: unknown;
 }): JobRow {
   const result = db.prepare(`
-    INSERT INTO jobs (mode, model, prompt, attachments, usage, unit_price, cost, currency, status, result)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO jobs (mode, model, prompt, attachments, usage, unit_price, cost, currency, cost_source, status, result)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     job.mode,
     job.model,
@@ -124,6 +141,7 @@ export function insertJob(db: DatabaseSync, job: {
     job.unitPrice === null || job.unitPrice === undefined ? null : JSON.stringify(job.unitPrice),
     job.cost,
     job.currency,
+    job.costSource,
     job.status,
     job.result === null || job.result === undefined ? null : JSON.stringify(job.result),
   );

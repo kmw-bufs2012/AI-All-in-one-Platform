@@ -33,17 +33,17 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ status: "failed", detail: status, raw: parsed });
     }
 
+    // NanoGPT 공식 문서: 응답에 실제 청구액(cost)이 함께 실립니다. 통화 표기가
+    // 없으면 전부 USD 기준입니다(예: cost_usd 필드).
+    const cost = extractCost(parsed);
+    const normalizedCost = cost ? { amount: cost.amount, currency: cost.currency ?? "USD" } : null;
+
     const videoUrl = extractVideoUrl(parsed);
     if (videoUrl) {
-      return NextResponse.json({ status: "completed", url: videoUrl, cost: extractCost(parsed) ?? null });
+      return NextResponse.json({ status: "completed", url: videoUrl, cost: normalizedCost });
     }
 
-    const cost = extractCost(parsed);
-    return NextResponse.json({
-      status,
-      cost: cost ? { amount: cost.amount, currency: cost.currency ?? null } : null,
-      raw: parsed,
-    });
+    return NextResponse.json({ status, cost: normalizedCost, raw: parsed });
   } catch (error) {
     const message = error instanceof Error ? error.message : "NanoGPT 영상 결과 확인에 실패했습니다.";
     const status = error instanceof Error && "status" in error ? Number((error as { status?: number }).status ?? 502) : 502;

@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
     unitPrice: row.unit_price ? JSON.parse(row.unit_price) : null,
     cost: row.cost,
     currency: row.currency,
+    costSource: row.cost_source,
     status: row.status,
     result: row.result ? JSON.parse(row.result) : null,
     createdAt: row.created_at,
@@ -36,6 +37,7 @@ export async function POST(request: NextRequest) {
     unitPrice?: unknown;
     cost?: unknown;
     currency?: unknown;
+    costSource?: unknown;
     status?: unknown;
     result?: unknown;
   };
@@ -57,6 +59,7 @@ export async function POST(request: NextRequest) {
     unitPrice: body.unitPrice ?? null,
     cost: typeof body.cost === "number" ? body.cost : null,
     currency: typeof body.currency === "string" ? body.currency : null,
+    costSource: body.costSource === "actual" || body.costSource === "estimated" ? body.costSource : null,
     status: typeof body.status === "string" ? body.status : "completed",
     result: body.result ?? null,
   });

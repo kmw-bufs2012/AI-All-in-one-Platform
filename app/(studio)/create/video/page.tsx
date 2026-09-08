@@ -23,7 +23,7 @@ export default function VideoPage() {
   const [results, setResults] = useStudioState<VideoResult[]>("video:results", []);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
-  const [estimate, setEstimate] = useState<{ amount: number; currency: string | null } | null>(null);
+  const [estimate, setEstimate] = useState<{ amount: number; currency: string | null; actual: boolean } | null>(null);
   const [error, setError] = useState("");
   const pollRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; startedAt: number }>({ timer: null, startedAt: 0 });
 
@@ -91,7 +91,10 @@ export default function VideoPage() {
     setError("");
     setBusy(true);
 
-    const quote = unitPrice !== null ? { amount: unitPrice, currency } : null;
+    // 카탈로그 단가로 우선 어림값을 보여 주고, 실제 요청·완료 응답에 청구액이
+    // 실리면 그 값으로 갈아 끼웁니다(NanoGPT 공식 문서: 응답마다 cost 필드가
+    // 실제 청구액을 담아 옵니다).
+    let quote = unitPrice !== null ? { amount: unitPrice, currency, actual: false } : null;
     setEstimate(quote);
 
     try {
@@ -108,6 +111,11 @@ export default function VideoPage() {
       });
       const queueBody = await queueResponse.json().catch(() => ({}));
       if (!queueResponse.ok) throw new Error(queueBody.error || "영상 생성 요청에 실패했습니다.");
+
+      if (queueBody.cost) {
+        quote = { amount: queueBody.cost.amount, currency: queueBody.cost.currency ?? null, actual: true };
+        setEstimate(quote);
+      }
 
       const runId: string = queueBody.runId;
       pollRef.current = { timer: null, startedAt: Date.now() };
@@ -127,6 +135,10 @@ export default function VideoPage() {
               const url: string | null = retrieveBody.url ?? null;
               if (url) setResults((prev) => [{ url, prompt: text }, ...prev]);
               setStatus("");
+              const finalCost = retrieveBody.cost
+                ? { amount: retrieveBody.cost.amount, currency: retrieveBody.cost.currency ?? null, actual: true }
+                : quote;
+              setEstimate(finalCost);
               recordJob({
                 mode: "video",
                 model: model.id,
@@ -134,8 +146,9 @@ export default function VideoPage() {
                 attachments: [startImage, sourceVideo].filter((item): item is AttachedFile => Boolean(item)),
                 usage: null,
                 unitPrice: model.pricing,
-                cost: quote?.amount ?? null,
-                currency: quote?.currency ?? null,
+                cost: finalCost?.amount ?? null,
+                currency: finalCost?.currency ?? null,
+                costSource: finalCost?.actual ? "actual" : finalCost ? "estimated" : null,
                 status: "completed",
                 result: url ? { kind: "video", urls: [url] } : null,
               });
@@ -152,6 +165,7 @@ export default function VideoPage() {
                 unitPrice: model.pricing,
                 cost: quote?.amount ?? null,
                 currency: quote?.currency ?? null,
+                costSource: quote?.actual ? "actual" : quote ? "estimated" : null,
                 status: "failed",
                 result: null,
               });
@@ -183,6 +197,7 @@ export default function VideoPage() {
         unitPrice: model.pricing,
         cost: quote?.amount ?? null,
         currency: quote?.currency ?? null,
+        costSource: quote?.actual ? "actual" : quote ? "estimated" : null,
         status: "failed",
         result: null,
       });
@@ -228,7 +243,7 @@ export default function VideoPage() {
           ) : null}
           {estimate ? (
             <div className="cost-line">
-              예상 비용: {estimate.currency ?? "USD"} {estimate.amount.toFixed(4)}
+              {estimate.actual ? "청구된 비용" : "예상 비용"}: {estimate.currency ?? "USD"} {estimate.amount.toFixed(4)}
             </div>
           ) : null}
         </div>

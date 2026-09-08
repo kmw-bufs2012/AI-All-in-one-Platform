@@ -34,19 +34,74 @@ export async function downscaleImage(file: File): Promise<File> {
   return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
 }
 
-export async function uploadFiles(files: File[]): Promise<AttachedFile[]> {
-  const prepared: File[] = [];
-  for (const file of files) {
-    prepared.push(file.type.startsWith("image/") ? await downscaleImage(file) : file);
+/*
+ * Vercel Serverless Function은 요청 본문을 4.5MB로 강제 제한합니다(인프라
+ * 레벨이라 애플리케이션 설정으로는 우회할 수 없습니다). 동영상·오디오·큰
+ * 문서는 이 한도를 쉽게 넘기므로, 그보다 훨씬 작은 조각으로 나눠
+ * /api/attachments/chunk 로 순차 전송한 뒤 서버에서 이어 붙입니다. 작은
+ * 파일(다운스케일된 이미지 등)은 기존처럼 한 번에 보냅니다.
+ * 참고: https://vercel.com/docs/errors/FUNCTION_PAYLOAD_TOO_LARGE
+ */
+const CHUNK_UPLOAD_THRESHOLD = 3 * 1024 * 1024;
+const CHUNK_SIZE = 3 * 1024 * 1024;
+
+async function uploadFileChunked(file: File, onProgress?: (fraction: number) => void): Promise<AttachedFile> {
+  const uploadId = crypto.randomUUID();
+  const total = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+  for (let index = 0; index < total; index++) {
+    const chunk = file.slice(index * CHUNK_SIZE, Math.min(file.size, (index + 1) * CHUNK_SIZE));
+    const formData = new FormData();
+    formData.append("chunk", chunk, file.name);
+    formData.append("uploadId", uploadId);
+    formData.append("index", String(index));
+    formData.append("total", String(total));
+    formData.append("name", file.name);
+    formData.append("mime", file.type || "application/octet-stream");
+    const response = await fetch("/api/attachments/chunk", { method: "POST", body: formData });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(body.error || "파일 업로드에 실패했습니다.");
+    }
+    onProgress?.((index + 1) / total);
+    if (index === total - 1) {
+      if (!body.file) throw new Error("파일 업로드에 실패했습니다.");
+      return body.file as AttachedFile;
+    }
   }
+  throw new Error("파일 업로드에 실패했습니다.");
+}
+
+async function uploadFileWhole(file: File): Promise<AttachedFile> {
   const formData = new FormData();
-  prepared.forEach((file) => formData.append("files", file));
+  formData.append("files", file);
   const response = await fetch("/api/attachments", { method: "POST", body: formData });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(body.error || "파일 업로드에 실패했습니다.");
   }
-  return Array.isArray(body.files) ? body.files : [];
+  const uploaded = Array.isArray(body.files) ? body.files : [];
+  if (!uploaded[0]) throw new Error("파일 업로드에 실패했습니다.");
+  return uploaded[0] as AttachedFile;
+}
+
+export async function uploadFiles(
+  files: File[],
+  onProgress?: (fileIndex: number, fraction: number) => void,
+): Promise<AttachedFile[]> {
+  const prepared: File[] = [];
+  for (const file of files) {
+    prepared.push(file.type.startsWith("image/") ? await downscaleImage(file) : file);
+  }
+  const uploaded: AttachedFile[] = [];
+  for (let i = 0; i < prepared.length; i++) {
+    const file = prepared[i];
+    uploaded.push(
+      file.size > CHUNK_UPLOAD_THRESHOLD
+        ? await uploadFileChunked(file, (fraction) => onProgress?.(i, fraction))
+        : await uploadFileWhole(file),
+    );
+  }
+  return uploaded;
 }
 
 /** 시각 모델에 동영상을 넘기기 위해 균등 간격으로 프레임을 뽑습니다. */

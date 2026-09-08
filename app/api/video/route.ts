@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { queueVideo, politeNanoGptError, readJson } from "@/lib/nanogpt";
-import { extractRunId, extractStatus } from "@/lib/extract";
+import { queueVideo, politeNanoGptError, readJson, sanitizeExtraParams } from "@/lib/nanogpt";
+import { extractRunId, extractStatus, extractCost } from "@/lib/extract";
 import { resolveUploadPath, mimeFromPath } from "@/lib/attachments";
 
 /*
@@ -31,7 +31,13 @@ async function resolveDataUrl(id: string): Promise<string | null> {
 }
 
 export async function POST(request: NextRequest) {
-  let body: { model?: unknown; prompt?: unknown; startImageId?: unknown; sourceVideoId?: unknown };
+  let body: {
+    model?: unknown;
+    prompt?: unknown;
+    startImageId?: unknown;
+    sourceVideoId?: unknown;
+    params?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
@@ -53,6 +59,12 @@ export async function POST(request: NextRequest) {
     const dataUrl = await resolveDataUrl(body.sourceVideoId);
     if (dataUrl) payload.videoDataUrl = dataUrl;
   }
+  // 길이·해상도·품질 등 모델이 supported_parameters로 공개한 나머지 설정.
+  const extraParams = sanitizeExtraParams(
+    body.params,
+    new Set(["model", "prompt", "imagedataurl", "videodataurl", "imageurl", "videourl"]),
+  );
+  Object.assign(payload, extraParams);
 
   try {
     const upstream = await queueVideo(payload);
@@ -64,10 +76,15 @@ export async function POST(request: NextRequest) {
     if (!runId) {
       throw new Error("영상 생성 요청 응답에서 작업 번호를 확인할 수 없습니다.");
     }
+    // 응답에 "runId, id, status, model, cost, remainingBalance" 형태로
+    // 실제 청구액이 함께 실리는 경우가 있어(NanoGPT 공식 문서), 있으면 즉시
+    // 돌려줍니다. 없으면 완료 시점에 /api/video/retrieve 에서 다시 확인합니다.
+    const cost = extractCost(bodyText);
     return NextResponse.json({
       ok: true,
       runId,
       status: extractStatus(bodyText) ?? "pending",
+      cost: cost ? { amount: cost.amount, currency: cost.currency ?? "USD" } : null,
       raw: bodyText,
     });
   } catch (error) {

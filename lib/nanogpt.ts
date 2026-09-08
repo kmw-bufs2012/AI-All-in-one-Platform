@@ -177,3 +177,32 @@ export async function generateSpeech(payload: Record<string, unknown>): Promise<
     body: JSON.stringify(payload),
   }, 120000);
 }
+
+/*
+ * 이미지·영상 생성 화면은 선택한 모델이 supported_parameters로 공개한 값만
+ * 그대로 NanoGPT에 전달합니다(비율·품질·스타일·길이 등, lib/models.ts의
+ * ExtraParam). 클라이언트가 보내는 키·값이 요청 본문에 그대로 섞여 들어가므로,
+ * model/prompt/첨부 관련 필드처럼 이 라우트가 이미 직접 채우는 예약 키는
+ * 클라이언트 값으로 덮어쓰지 못하게 막고, 키 형식과 값 타입도 검증합니다.
+ */
+const PARAM_KEY_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
+
+export function sanitizeExtraParams(
+  input: unknown,
+  reservedKeys: Set<string>,
+): Record<string, string | number | boolean> {
+  const result: Record<string, string | number | boolean> = {};
+  if (!input || typeof input !== "object" || Array.isArray(input)) return result;
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (!PARAM_KEY_PATTERN.test(key)) continue;
+    if (reservedKeys.has(key.toLowerCase())) continue;
+    if (typeof value === "string" && value.length > 0 && value.length <= 500) {
+      result[key] = value;
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      result[key] = value;
+    } else if (typeof value === "boolean") {
+      result[key] = value;
+    }
+  }
+  return result;
+}
