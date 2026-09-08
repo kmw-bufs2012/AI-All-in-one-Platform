@@ -4,6 +4,7 @@ import path from "node:path";
 import { queueVideo, politeNanoGptError, readJson, sanitizeExtraParams } from "@/lib/nanogpt";
 import { extractRunId, extractStatus, extractCost } from "@/lib/extract";
 import { resolveUploadPath, mimeFromPath } from "@/lib/attachments";
+import { findVideoOverlay } from "@/lib/model-capability-overlay";
 
 /*
  * NanoGPT 영상 생성(POST /api/generate-video)은 비동기입니다. 요청은 즉시
@@ -36,6 +37,7 @@ export async function POST(request: NextRequest) {
     prompt?: unknown;
     startImageId?: unknown;
     sourceVideoId?: unknown;
+    endImageId?: unknown;
     params?: unknown;
   };
   try {
@@ -59,11 +61,26 @@ export async function POST(request: NextRequest) {
     const dataUrl = await resolveDataUrl(body.sourceVideoId);
     if (dataUrl) payload.videoDataUrl = dataUrl;
   }
+  // 끝 프레임(예: Kling의 image_tail)은 원 개발사 자료로 확인된 모델에서만
+  // 지원합니다. 필드 이름은 클라이언트가 아니라 서버가
+  // lib/model-capability-overlay.ts에서 찾아 붙입니다 — 클라이언트가 임의의
+  // 필드 이름을 주입하지 못하게 하기 위함입니다.
+  let endImageField: string | null = null;
+  if (typeof body.endImageId === "string") {
+    const overlay = findVideoOverlay(model, model);
+    const endFrameRole = overlay?.imageRoles?.find((role) => role.role === "end_frame");
+    if (endFrameRole) {
+      const dataUrl = await resolveDataUrl(body.endImageId);
+      if (dataUrl) {
+        payload[endFrameRole.field] = dataUrl;
+        endImageField = endFrameRole.field;
+      }
+    }
+  }
   // 길이·해상도·품질 등 모델이 supported_parameters로 공개한 나머지 설정.
-  const extraParams = sanitizeExtraParams(
-    body.params,
-    new Set(["model", "prompt", "imagedataurl", "videodataurl", "imageurl", "videourl"]),
-  );
+  const reservedKeys = new Set(["model", "prompt", "imagedataurl", "videodataurl", "imageurl", "videourl"]);
+  if (endImageField) reservedKeys.add(endImageField.toLowerCase());
+  const extraParams = sanitizeExtraParams(body.params, reservedKeys);
   Object.assign(payload, extraParams);
 
   try {

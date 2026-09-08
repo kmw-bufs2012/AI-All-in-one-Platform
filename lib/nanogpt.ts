@@ -187,6 +187,25 @@ export async function generateSpeech(payload: Record<string, unknown>): Promise<
  */
 const PARAM_KEY_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 
+/*
+ * 알려진 위험 파라미터의 절대 상한. 선택한 모델이 실제로 허용하는 정확한
+ * 범위(예: Kling은 duration 5~10초)까지 서버에서 재검증하려면 매 생성
+ * 요청마다 그 모델의 카탈로그 항목을 다시 조회해야 하는데, 그 비용(지연·
+ * NanoGPT 요청 횟수 증가)이 크다고 판단해 이번 작업에서는 하지 않았습니다.
+ * 대신 어느 모델에도 통하지 않는 명백히 비정상적인 값(예: duration=99999)만
+ * 여기서 막고, 나머지 정확한 범위 검증은 NanoGPT 응답(4xx) 에 맡깁니다.
+ * → PR 설명의 "남은 위험 요소"에 이 한계를 명시했습니다.
+ */
+const NUMERIC_PARAM_BOUNDS: Record<string, { min: number; max: number }> = {
+  duration: { min: 0, max: 300 },
+  seconds: { min: 0, max: 300 },
+  cfg_scale: { min: 0, max: 100 },
+  guidance_scale: { min: 0, max: 100 },
+  num_inference_steps: { min: 1, max: 500 },
+  strength: { min: 0, max: 1 },
+  n: { min: 1, max: 50 },
+};
+
 export function sanitizeExtraParams(
   input: unknown,
   reservedKeys: Set<string>,
@@ -199,6 +218,8 @@ export function sanitizeExtraParams(
     if (typeof value === "string" && value.length > 0 && value.length <= 500) {
       result[key] = value;
     } else if (typeof value === "number" && Number.isFinite(value)) {
+      const bounds = NUMERIC_PARAM_BOUNDS[key.toLowerCase()];
+      if (bounds && (value < bounds.min || value > bounds.max)) continue;
       result[key] = value;
     } else if (typeof value === "boolean") {
       result[key] = value;

@@ -1,4 +1,9 @@
 import { modelDescription } from "./model-descriptions";
+import {
+  findVideoOverlay,
+  applyDurationOverlay,
+  type ImageRoleOverlay,
+} from "./model-capability-overlay";
 
 /*
  * NanoGPT 모델 카탈로그 정규화.
@@ -148,6 +153,15 @@ export interface NormalizedModel {
   acceptsSourceVideo: boolean | null;
   /** 시작 이미지·원본 영상 외에 모델이 공개한 나머지 설정(길이·해상도·품질 등). */
   videoParams: ExtraParam[];
+  /**
+   * 원 개발사 자료로 확인된 끝 프레임 등 추가 이미지 역할(lib/model-capability-overlay.ts).
+   * 모델 ID가 조사된 계열과 매칭될 때만 채워지며, 나머지 모델은 빈 배열입니다
+   * (조사 범위는 docs/model-capability-research.md 참고 — 카탈로그 전체가
+   * 아니라 우선순위 모델 계열만 다룹니다).
+   */
+  extraImageRoles: ImageRoleOverlay[];
+  /** 원 개발사 자료로 확인된 길이 제한 관련 설명(있을 때만). */
+  durationNote: string | null;
 
   /* ------------------------------------------------------------ TTS 모델 */
   voices: VoiceInfo[];
@@ -575,7 +589,15 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     "imageurl", "image_url", "imagedataurl", "image_data_url", "image", "input_references", "start_image", "init_image",
     "videourl", "video_url", "videodataurl", "source_video",
   ]);
-  const videoParams = kind === "video" ? extractExtraParams(params, videoExclude) : [];
+  const rawVideoParams = kind === "video" ? extractExtraParams(params, videoExclude) : [];
+  // 원 개발사 자료로 확인된 길이 상한이 있으면 카탈로그 값을 그 이상으로
+  // 넓히지 않고 좁히기만 합니다(lib/model-capability-overlay.ts 상단 설명 참고).
+  const videoOverlay = kind === "video" ? findVideoOverlay(id, name) : null;
+  const videoParams = videoOverlay?.duration
+    ? applyDurationOverlay(rawVideoParams, videoOverlay.duration)
+    : rawVideoParams;
+  const extraImageRoles = videoOverlay?.imageRoles ?? [];
+  const durationNote = videoOverlay?.duration?.note ?? null;
 
   const voiceResult = extractVoices(raw, params);
   const supportedFormats = paramValues(params, "format", "response_format", "formats")
@@ -620,6 +642,8 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     acceptsStartImage,
     acceptsSourceVideo,
     videoParams,
+    extraImageRoles,
+    durationNote,
 
     voices: voiceResult.voices,
     defaultVoice: voiceResult.defaultVoice,
