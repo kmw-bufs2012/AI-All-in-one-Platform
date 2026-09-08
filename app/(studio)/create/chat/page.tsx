@@ -180,7 +180,7 @@ export default function ChatPage() {
     setSending(true);
 
     const snapshot = [...attachments];
-    const hasVision = model.vision;
+    const hasVision = policy.image.allowed;
     const videoNative = policy.videoNative;
     let frames: string[] = [];
     let framesCount = 0;

@@ -59,19 +59,38 @@ export interface ChatAttachmentPolicy {
   note: string | null;
 }
 
+/*
+ * 능력이 null(카탈로그 미공개)이면 허용 쪽으로 해석합니다. NanoGPT 카탈로그는
+ * 모델마다 메타데이터 수록 정도가 달라, 미공개를 "미지원"으로 단정하면 실제로는
+ * 첨부되는 모델까지 버튼이 잠깁니다. 지원하지 않는 모델에 첨부를 보내면 API가
+ * 오류를 돌려주므로 사용자가 원인을 알 수 있지만, 버튼이 잠기면 알 방법이 없습니다.
+ */
 export function resolveChatAttachmentPolicy(model: NormalizedModel | null): ChatAttachmentPolicy {
-  const vision = model?.vision ?? false;
-  const nativeVideo = model?.videoInput ?? false;
-  const audio = model?.audioInput ?? false;
-  const pdf = model?.pdfUpload ?? false;
+  if (!model) {
+    return {
+      image: { allowed: false, max: 0 },
+      video: { allowed: false, max: 0 },
+      audio: { allowed: false, max: 0 },
+      doc: { allowed: true, max: CHAT_MAX_DOCS },
+      videoNative: false,
+      frameCount: VIDEO_FRAME_COUNT,
+      pdfAllowed: true,
+      docAccept: ".pdf,.txt,.md,text/plain,text/markdown,application/pdf",
+      note: null,
+    };
+  }
+  const vision = model.vision ?? true;
+  const nativeVideo = model.videoInput ?? false;
+  const audio = model.audioInput ?? false;
+  const pdf = model.pdfUpload ?? true;
 
   // 동영상은 직접 지원하면 그대로, 비전만 되면 프레임을 뽑아 이미지로 보냅니다.
   const videoAllowed = nativeVideo || vision;
 
   const notes: string[] = [];
-  if (model && !vision) notes.push("이미지를 인식하지 못하는 모델입니다");
-  if (model && !nativeVideo && vision) notes.push("동영상은 프레임을 뽑아 이미지로 전달합니다");
-  if (model && !pdf) notes.push("PDF를 지원하지 않아 텍스트 문서(txt·md)만 첨부할 수 있습니다");
+  if (!vision) notes.push("이미지를 인식하지 못하는 모델입니다");
+  if (!nativeVideo && vision) notes.push("동영상은 프레임을 뽑아 이미지로 전달합니다");
+  if (!pdf) notes.push("PDF를 지원하지 않아 텍스트 문서(txt·md)만 첨부할 수 있습니다");
 
   return {
     image: { allowed: vision, max: vision ? CHAT_MAX_IMAGES : 0 },
@@ -96,9 +115,16 @@ export interface ImageAttachmentPolicy {
 }
 
 const DEFAULT_REFERENCE_FORMATS = ["png", "jpeg", "webp"];
+/*
+ * 카탈로그가 max_items 를 싣지 않은 모델의 기본 허용 장수. 공식 Image API 의
+ * input_reference_constraints 예시 값(4)을 그대로 씁니다.
+ */
+const DEFAULT_MAX_REFERENCES = 4;
 
 export function resolveImageAttachmentPolicy(model: NormalizedModel | null): ImageAttachmentPolicy {
-  const max = model?.maxInputReferences ?? 0;
+  // null(미공개)이면 막지 않고 기본값을 씁니다. 지원하지 않는 모델은 API가
+  // input_references 를 무시하거나 오류로 알려 줍니다.
+  const max = model ? (model.maxInputReferences ?? DEFAULT_MAX_REFERENCES) : 0;
   const formats = model?.referenceFormats?.length ? model.referenceFormats : DEFAULT_REFERENCE_FORMATS;
   return {
     reference: { allowed: max > 0, max },
@@ -113,13 +139,24 @@ export interface VideoAttachmentPolicy {
   sourceVideo: AttachmentSlot;
 }
 
+/*
+ * 영상 모델은 supported_parameters 로 입력 방식을 판정하되, 카탈로그가 아무
+ * 정보도 싣지 않은 모델(null)은 막지 않고 허용합니다. 지원하지 않는 모델에
+ * 이미지를 보내면 NanoGPT가 해당 필드를 무시하거나 오류 메시지를 돌려주므로,
+ * 첨부 자체를 막아 실제로 되는 모델까지 못 쓰게 하는 쪽이 더 나쁩니다.
+ */
 export function resolveVideoAttachmentPolicy(model: NormalizedModel | null): VideoAttachmentPolicy {
+  if (!model) {
+    return { startImage: { allowed: false, max: 0 }, sourceVideo: { allowed: false, max: 0 } };
+  }
+  const startAllowed = model.acceptsStartImage ?? true;
+  const sourceAllowed = model.acceptsSourceVideo ?? false;
   return {
     startImage: {
-      allowed: model?.acceptsStartImage ?? false,
-      max: model?.maxStartImages ?? 0,
+      allowed: startAllowed,
+      max: startAllowed ? Math.max(1, model.maxInputReferences ?? 1) : 0,
     },
-    sourceVideo: { allowed: model?.acceptsSourceVideo ?? false, max: model?.acceptsSourceVideo ? 1 : 0 },
+    sourceVideo: { allowed: sourceAllowed, max: sourceAllowed ? 1 : 0 },
   };
 }
 
