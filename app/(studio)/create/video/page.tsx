@@ -25,6 +25,7 @@ export default function VideoPage() {
   const [prompt, setPrompt] = useStudioState<string>("video:prompt", "");
   const [startImage, setStartImage] = useStudioState<AttachedFile | null>("video:startImage", null);
   const [sourceVideo, setSourceVideo] = useStudioState<AttachedFile | null>("video:sourceVideo", null);
+  const [endFrameImage, setEndFrameImage] = useStudioState<AttachedFile | null>("video:endFrameImage", null);
   const [paramValues, setParamValues] = useStudioState<ParamValues>("video:params", {});
   const [results, setResults] = useStudioState<VideoResult[]>("video:results", []);
   const [busy, setBusy] = useState(false);
@@ -44,6 +45,10 @@ export default function VideoPage() {
   const maxStartImages = policy.startImage.max;
   const supportsStartImage = policy.startImage.allowed;
   const supportsSourceVideo = policy.sourceVideo.allowed;
+  // 원 개발사 자료로 끝 프레임 입력이 확인된 모델(예: Kling)에서만 노출합니다.
+  // 근거: docs/model-capability-research.md, lib/model-capability-overlay.ts
+  const supportsEndFrame = (models.selected?.extraImageRoles ?? []).some((role) => role.role === "end_frame");
+  const durationNote = models.selected?.durationNote ?? null;
   // NanoGPT에는 영상 견적 전용 엔드포인트가 없어, 카탈로그가 공개한 단가로
   // 예상 비용을 보여 줍니다(공개하지 않는 모델은 표시하지 않습니다).
   const unitPrice = models.selected?.pricing?.perRequest ?? null;
@@ -70,6 +75,23 @@ export default function VideoPage() {
     try {
       const uploaded = await uploadFiles([file]);
       setStartImage(uploaded[0] ?? null);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "이미지 업로드에 실패했습니다.");
+    }
+  }
+
+  async function pickEndFrameImage(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setError("");
+    if (!supportsEndFrame) {
+      setError("이 모델은 끝 프레임을 지원하지 않습니다.");
+      return;
+    }
+    try {
+      const uploaded = await uploadFiles([file]);
+      setEndFrameImage(uploaded[0] ?? null);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "이미지 업로드에 실패했습니다.");
     }
@@ -103,6 +125,7 @@ export default function VideoPage() {
     setPrompt("");
     setStartImage(null);
     setSourceVideo(null);
+    setEndFrameImage(null);
     setResults([]);
     setStatus("");
     setEstimate(null);
@@ -136,6 +159,7 @@ export default function VideoPage() {
           prompt: text,
           startImageId: supportsStartImage ? startImage?.id : undefined,
           sourceVideoId: supportsSourceVideo ? sourceVideo?.id : undefined,
+          endImageId: supportsEndFrame ? endFrameImage?.id : undefined,
           params: filterSupportedParamValues(model.videoParams, paramValues),
         }),
       });
@@ -173,7 +197,7 @@ export default function VideoPage() {
                 mode: "video",
                 model: model.id,
                 prompt: text,
-                attachments: [startImage, sourceVideo].filter((item): item is AttachedFile => Boolean(item)),
+                attachments: [startImage, sourceVideo, endFrameImage].filter((item): item is AttachedFile => Boolean(item)),
                 usage: null,
                 unitPrice: model.pricing,
                 cost: finalCost?.amount ?? null,
@@ -190,7 +214,7 @@ export default function VideoPage() {
                 mode: "video",
                 model: model.id,
                 prompt: text,
-                attachments: [startImage, sourceVideo].filter((item): item is AttachedFile => Boolean(item)),
+                attachments: [startImage, sourceVideo, endFrameImage].filter((item): item is AttachedFile => Boolean(item)),
                 usage: null,
                 unitPrice: model.pricing,
                 cost: quote?.amount ?? null,
@@ -222,7 +246,7 @@ export default function VideoPage() {
         mode: "video",
         model: model.id,
         prompt: text,
-        attachments: [startImage, sourceVideo].filter((item): item is AttachedFile => Boolean(item)),
+        attachments: [startImage, sourceVideo, endFrameImage].filter((item): item is AttachedFile => Boolean(item)),
         usage: null,
         unitPrice: model.pricing,
         cost: quote?.amount ?? null,
@@ -249,6 +273,7 @@ export default function VideoPage() {
             values={paramValues}
             onChange={changeParam}
           />
+          {durationNote ? <p className="muted" style={{ fontSize: 11.5, marginTop: -8, marginBottom: 12 }}>{durationNote}</p> : null}
 
           {results.length === 0 ? (
             <div className="studio-hero">
@@ -303,9 +328,10 @@ export default function VideoPage() {
             rows={1}
           />
           <AttachStrip
-            files={[startImage, sourceVideo].filter((item): item is AttachedFile => Boolean(item))}
+            files={[startImage, endFrameImage, sourceVideo].filter((item): item is AttachedFile => Boolean(item))}
             onRemove={(id) => {
               if (startImage?.id === id) setStartImage(null);
+              if (endFrameImage?.id === id) setEndFrameImage(null);
               if (sourceVideo?.id === id) setSourceVideo(null);
             }}
           />
@@ -324,6 +350,15 @@ export default function VideoPage() {
               onPick={pickStartImage}
               title={supportsStartImage ? "시작 이미지 첨부" : "이 모델은 시작 이미지를 지원하지 않습니다"}
             />
+            {supportsEndFrame ? (
+              <FileChip
+                label={`끝 프레임 ${endFrameImage ? 1 : 0}/1`}
+                accept="image/*"
+                disabled={compressingVideo}
+                onPick={pickEndFrameImage}
+                title="영상이 끝나는 장면의 이미지 첨부(선택)"
+              />
+            ) : null}
             {supportsSourceVideo ? (
               <FileChip
                 label={`원본 영상 ${sourceVideo ? 1 : 0}/${policy.sourceVideo.max}`}

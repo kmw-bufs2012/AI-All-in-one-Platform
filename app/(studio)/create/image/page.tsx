@@ -22,6 +22,7 @@ import { recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { resolveImageAttachmentPolicy } from "@/lib/attachment-policy";
 import { formatCost } from "@/lib/cost";
 import { filterSupportedParamValues } from "@/lib/models";
+import { PROMPT_STYLE_PRESETS } from "@/lib/model-param-labels";
 
 /*
  * 해상도 목록은 고정값이 아니라 모델이 공개한 값을 씁니다.
@@ -41,6 +42,7 @@ export default function ImagePage() {
   const [refs, setRefs] = useStudioState<AttachedFile[]>("image:refs", []);
   const [resolution, setResolution] = useStudioState<string>("image:resolution", DEFAULT_RESOLUTION);
   const [paramValues, setParamValues] = useStudioState<ParamValues>("image:params", {});
+  const [stylePreset, setStylePreset] = useStudioState<string>("image:stylePreset", "");
   const [results, setResults] = useStudioState<string[]>("image:results", []);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
@@ -48,6 +50,11 @@ export default function ImagePage() {
   const [lightbox, setLightbox] = useState<string | null>(null);
 
   const policy = resolveImageAttachmentPolicy(models.selected);
+  // 카탈로그가 style 계열 파라미터를 선언한 모델은 그 값을 구조화된 API
+  // 파라미터로 그대로 보냅니다(DynamicParamsPanel). 선언하지 않은 모델에는
+  // 존재하지 않는 필드를 보낼 수 없으므로, 프롬프트에 문구를 덧붙이는
+  // 방식의 스타일 프리셋을 대신 보여 줍니다(lib/model-param-labels.ts 참고).
+  const hasStructuredStyle = (models.selected?.imageParams ?? []).some((item) => /^style/i.test(item.key));
   const maxRefs = policy.reference.max;
   const supportsRefs = policy.reference.allowed;
   const resolutions = models.selected?.resolutions ?? [];
@@ -113,13 +120,17 @@ export default function ImagePage() {
     }
     setError("");
     setGenerating(true);
+    // 구조화된 style 파라미터가 없는 모델에서 프리셋을 골랐다면, API 파라미터가
+    // 아니라 프롬프트 문구로 반영합니다(존재하지 않는 style 필드를 보내지 않기 위함).
+    const preset = !hasStructuredStyle ? PROMPT_STYLE_PRESETS.find((item) => item.value === stylePreset) : undefined;
+    const finalPrompt = preset ? `${text}, ${preset.promptPhrase}` : text;
     try {
       const response = await fetch("/api/image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: model.id,
-          prompt: text,
+          prompt: finalPrompt,
           referenceIds: refs.map((item) => item.id),
           resolution: activeResolution === DEFAULT_RESOLUTION ? undefined : activeResolution,
           params: filterSupportedParamValues(model.imageParams, paramValues),
@@ -242,6 +253,18 @@ export default function ImagePage() {
                 options={[
                   { value: DEFAULT_RESOLUTION, label: "모델 기본" },
                   ...resolutions.map((item) => ({ value: item, label: item })),
+                ]}
+              />
+            ) : null}
+            {!hasStructuredStyle && models.selected ? (
+              <SelectChip
+                icon="quality"
+                title="스타일 프리셋(프롬프트에 반영됩니다)"
+                value={stylePreset}
+                onChange={setStylePreset}
+                options={[
+                  { value: "", label: "스타일 프리셋 없음" },
+                  ...PROMPT_STYLE_PRESETS.map((item) => ({ value: item.value, label: item.labelKo })),
                 ]}
               />
             ) : null}

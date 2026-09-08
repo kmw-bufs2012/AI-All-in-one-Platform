@@ -1,4 +1,9 @@
 import { modelDescription } from "./model-descriptions";
+import {
+  findVideoOverlay,
+  applyDurationOverlay,
+  type ImageRoleOverlay,
+} from "./model-capability-overlay";
 
 /*
  * NanoGPT 모델 카탈로그 정규화.
@@ -55,12 +60,18 @@ export interface ExtraParam {
   default?: string | number | null;
 }
 
-/** 다른 모델에서 저장된 값이 현재 모델의 요청에 섞이지 않도록 허용값까지 검증합니다. */
+/**
+ * 다른 모델에서 저장된 값이 현재 모델의 요청에 섞이지 않도록 허용값까지
+ * 검증합니다. params가 배열이 아니면(예: 모델 카탈로그를 아직 못 불러왔거나
+ * 예상과 다른 모양으로 온 경우) "params is not iterable"로 화면 전체가
+ * 죽는 대신 빈 값으로 안전하게 넘어갑니다.
+ */
 export function filterSupportedParamValues(
-  params: ExtraParam[],
+  params: ExtraParam[] | null | undefined,
   values: Record<string, string | number>,
 ): Record<string, string | number> {
   const result: Record<string, string | number> = {};
+  if (!Array.isArray(params)) return result;
   for (const param of params) {
     const value = values[param.key];
     if (value === undefined) continue;
@@ -142,6 +153,15 @@ export interface NormalizedModel {
   acceptsSourceVideo: boolean | null;
   /** 시작 이미지·원본 영상 외에 모델이 공개한 나머지 설정(길이·해상도·품질 등). */
   videoParams: ExtraParam[];
+  /**
+   * 원 개발사 자료로 확인된 끝 프레임 등 추가 이미지 역할(lib/model-capability-overlay.ts).
+   * 모델 ID가 조사된 계열과 매칭될 때만 채워지며, 나머지 모델은 빈 배열입니다
+   * (조사 범위는 docs/model-capability-research.md 참고 — 카탈로그 전체가
+   * 아니라 우선순위 모델 계열만 다룹니다).
+   */
+  extraImageRoles: ImageRoleOverlay[];
+  /** 원 개발사 자료로 확인된 길이 제한 관련 설명(있을 때만). */
+  durationNote: string | null;
 
   /* ------------------------------------------------------------ TTS 모델 */
   voices: VoiceInfo[];
@@ -520,32 +540,64 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const imageParams = kind === "image" ? extractExtraParams(params, imageExclude) : [];
 
   /*
-   * 영상 생성 입력. 모델이 받는 파라미터로 판정하되, supported_parameters 자체가
-   * 비어 있으면(카탈로그 미수록) null로 두어 정책에서 허용 쪽으로 해석합니다.
+   * 영상 생성 입력(시작 이미지) 판정.
+   *
+   * 이전 구현은 "supported_parameters에 imageUrl류 키가 없고, 그 밖의
+   * 파라미터(duration 등)는 있음(paramsKnown=true)"이면 곧바로 false로
+   * 단정했습니다. 그런데 실제 NanoGPT 영상 API 조사 결과, 다음 두 가지가
+   * 확인됩니다.
+   *   1) 실제 요청 필드로 imageUrl / imageDataUrl 이 여러 모델에서 통용됩니다
+   *      (예: kling-v21-pro 요청 예시에 "imageUrl": "https://..." 가 그대로
+   *      쓰임 — NanoGPT 블로그 "How to Calculate AI Image API Costs" 예시).
+   *   2) "Unified" 모델(예: Wan 2.7, HappyHorse)은 "routes to text-to-video,
+   *      image-to-video, reference-to-video, or video edit based on the
+   *      inputs you provide"처럼 어떤 필드를 채워 보내느냐로 모드가 정해지는
+   *      구조라서, 이미지 입력을 supported_parameters의 "튜닝 가능한 옵션"
+   *      목록에 아예 넣지 않는 경우가 흔합니다(duration·resolution처럼
+   *      "설정값"이 아니라 "선택적 입력 필드"이기 때문).
+   * 즉 supported_parameters에 이미지 키가 없다는 사실 자체가 "이미지를 못
+   * 받는다"는 증거가 되지 못합니다. 그래서 긍정 신호(선언된 파라미터,
+   * "image-to-video"/"i2v" 언급)가 있으면 true, 명시적으로 "text-to-video만
+   * 지원"이라고 알 수 있는 부정 신호가 있을 때만 false, 그 외에는 전부
+   * null(미확인)로 두어 정책 단계(lib/attachment-policy.ts)의 허용 기본값을
+   * 따르게 합니다.
    */
-  const paramsKnown = params.names.size > 0;
   const imageParam = hasParam(
     params,
     "imageurl", "image_url", "imagedataurl", "image_data_url", "image", "input_references", "start_image", "init_image",
+    "firstframeimage", "first_frame_image", "firstframe", "startframe", "referenceimage", "reference_image",
   );
   const acceptsStartImage = imageParam || (maxInputReferences ?? 0) > 0
     ? true
-    : mentions(haystack, /image[- ]?to[- ]?video|\bi2v\b/)
+    : mentions(haystack, /image[- ]?to[- ]?video|\bi2v\b|first[- ]?frame|unified|multi-?modal/)
       ? true
-      : paramsKnown ? false : null;
+      // "text-to-video"만 언급되고 이미지·통합 관련 신호가 전혀 없을 때만
+      // 명시적 미지원으로 봅니다. 그 밖에는 판단 근거가 부족하므로 null.
+      : mentions(haystack, /\btext[- ]?to[- ]?video\b|\bt2v\b/)
+          && !mentions(haystack, /image|i2v|unified|multi-?modal|first[- ]?frame/)
+        ? false
+        : null;
   const videoParam = hasParam(params, "videourl", "video_url", "videodataurl", "source_video");
   const acceptsSourceVideo = videoParam
     ? true
-    : mentions(haystack, /extend|video[- ]?to[- ]?video|\bv2v\b/)
+    : mentions(haystack, /extend|video[- ]?to[- ]?video|\bv2v\b|video[- ]?edit/)
       ? true
-      : paramsKnown ? false : null;
+      : null;
   // 시작 이미지·원본 영상 입력 파라미터는 빼고, 나머지(길이·해상도·품질 등)를
   // 모델별 설정 컨트롤로 그대로 넘깁니다.
   const videoExclude = new Set([
     "imageurl", "image_url", "imagedataurl", "image_data_url", "image", "input_references", "start_image", "init_image",
     "videourl", "video_url", "videodataurl", "source_video",
   ]);
-  const videoParams = kind === "video" ? extractExtraParams(params, videoExclude) : [];
+  const rawVideoParams = kind === "video" ? extractExtraParams(params, videoExclude) : [];
+  // 원 개발사 자료로 확인된 길이 상한이 있으면 카탈로그 값을 그 이상으로
+  // 넓히지 않고 좁히기만 합니다(lib/model-capability-overlay.ts 상단 설명 참고).
+  const videoOverlay = kind === "video" ? findVideoOverlay(id, name) : null;
+  const videoParams = videoOverlay?.duration
+    ? applyDurationOverlay(rawVideoParams, videoOverlay.duration)
+    : rawVideoParams;
+  const extraImageRoles = videoOverlay?.imageRoles ?? [];
+  const durationNote = videoOverlay?.duration?.note ?? null;
 
   const voiceResult = extractVoices(raw, params);
   const supportedFormats = paramValues(params, "format", "response_format", "formats")
@@ -590,6 +642,8 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     acceptsStartImage,
     acceptsSourceVideo,
     videoParams,
+    extraImageRoles,
+    durationNote,
 
     voices: voiceResult.voices,
     defaultVoice: voiceResult.defaultVoice,

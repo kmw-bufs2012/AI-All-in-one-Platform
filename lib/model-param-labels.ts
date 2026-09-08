@@ -12,6 +12,8 @@ export const PARAM_KEY_LABELS: Record<string, string> = {
   quality: "품질",
   style: "스타일",
   style_preset: "스타일",
+  // Ideogram 공식 문서에서 확인된 실제 파라미터 이름입니다.
+  style_type: "스타일",
   duration: "길이(초)",
   seconds: "길이(초)",
   resolution: "해상도",
@@ -60,6 +62,18 @@ export const PARAM_VALUE_LABELS: Record<string, Record<string, string>> = {
   style: {
     general: "일반(프롬프트로 스타일 지정)",
     common: "일반 영상",
+    // Ideogram 공식 문서(style_type)에서 확인된 정확한 값입니다.
+    // 출처: docs/model-capability-research.md, docs.ideogram.ai
+    auto: "자동(프롬프트에 맞춰 선택)",
+    design: "디자인(로고·인쇄물)",
+    render_3d: "3D 렌더링",
+    // Recraft 공식 문서(style)에서 확인된 정확한 값입니다.
+    // 출처: docs/model-capability-research.md, recraft.ai/docs
+    realistic_image: "실사 이미지",
+    digital_illustration: "디지털 일러스트",
+    vector_illustration: "벡터 일러스트",
+    icon: "아이콘",
+    logo_raster: "로고(래스터)",
     anime: "일본 애니메이션",
     "anime-style": "일본 애니메이션",
     manga: "만화(망가)",
@@ -152,6 +166,51 @@ export function paramKeyLabel(key: string): string {
   return PARAM_KEY_LABELS[key.toLowerCase()] ?? key;
 }
 
+// style_type · style_preset은 실제로는 전부 같은 "스타일" 값 사전을 쓰므로
+// value 사전 조회 시 style로 대체합니다(키 이름만 모델마다 다를 뿐 값의
+// 의미는 같습니다 — 예: Ideogram의 style_type=ANIME도 "일본 애니메이션"으로 표시).
+const VALUE_LOOKUP_KEY_ALIASES: Record<string, string> = {
+  style_type: "style",
+  style_preset: "style",
+};
+
 export function paramValueLabel(key: string, value: string): string {
-  return PARAM_VALUE_LABELS[key.toLowerCase()]?.[value.toLowerCase()] ?? value;
+  const lookupKey = VALUE_LOOKUP_KEY_ALIASES[key.toLowerCase()] ?? key.toLowerCase();
+  return PARAM_VALUE_LABELS[lookupKey]?.[value.toLowerCase()] ?? value;
 }
+
+/*
+ * 프롬프트 기반 스타일 프리셋.
+ *
+ * 이미지 모델이 API 파라미터로 진짜 style을 받는지(구조화 — 예: Ideogram의
+ * style_type, Recraft의 style)는 모델마다 다르고, 카탈로그가 그런 파라미터를
+ * 공개하지 않은 모델(예: Flux·Stable Diffusion 계열 다수)에는 존재하지도
+ * 않는 필드를 보낼 수 없습니다. 그런 모델은 스타일을 프롬프트 문구로
+ * 유도하는 것이 일반적인 사용법입니다.
+ *
+ * 이 목록은 그 프롬프트 문구 도우미입니다 — "이 모델이 이 스타일을 지원한다"는
+ * 검증된 사실이 아니라, 프롬프트에 자연스럽게 덧붙일 수 있는 문구 모음입니다.
+ * API 파라미터가 아니라 프롬프트 텍스트에만 반영되므로, 모델이 실제로 그
+ * 스타일을 얼마나 잘 표현하는지는 모델 성능에 달려 있습니다. UI에서는 반드시
+ * "프롬프트에 반영됩니다"라고 표시해 구조화 파라미터와 혼동하지 않게 합니다.
+ */
+export interface PromptStylePreset {
+  value: string;
+  labelKo: string;
+  /** 프롬프트 끝에 그대로 덧붙이는 영문 문구. */
+  promptPhrase: string;
+}
+
+export const PROMPT_STYLE_PRESETS: PromptStylePreset[] = [
+  { value: "anime", labelKo: "일본 애니메이션", promptPhrase: "Japanese anime style, cel-shaded illustration" },
+  { value: "photorealistic", labelKo: "초사실적", promptPhrase: "photorealistic, highly detailed, realistic lighting" },
+  { value: "cinematic", labelKo: "영화적", promptPhrase: "cinematic lighting, dramatic composition, film still" },
+  { value: "3d-render", labelKo: "3D 렌더링", promptPhrase: "3D render, octane render, subsurface scattering" },
+  { value: "digital-art", labelKo: "디지털 아트", promptPhrase: "digital art, concept art style" },
+  { value: "watercolor", labelKo: "수채화", promptPhrase: "watercolor painting, soft brush strokes" },
+  { value: "oil-painting", labelKo: "유화", promptPhrase: "oil painting, thick brush strokes, canvas texture" },
+  { value: "sketch", labelKo: "스케치", promptPhrase: "pencil sketch, line art, hand-drawn" },
+  { value: "pixel-art", labelKo: "픽셀 아트", promptPhrase: "pixel art, 8-bit style" },
+  { value: "cyberpunk", labelKo: "사이버펑크", promptPhrase: "cyberpunk aesthetic, neon lights, futuristic" },
+  { value: "fantasy", labelKo: "판타지", promptPhrase: "fantasy art style, ethereal atmosphere" },
+];
