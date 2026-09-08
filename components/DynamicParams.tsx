@@ -53,6 +53,15 @@ function nearestAllowed(value: number, allowed: number[]): number {
   allowed[0]);
 }
 
+function numericParamValue(value: string | number | null | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const match = value.trim().match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:s|sec|secs|second|seconds|초)?$/i);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function ParamControl({
   param,
   value,
@@ -66,9 +75,20 @@ function ParamControl({
 
   if (param.kind === "range" && param.min !== undefined && param.max !== undefined) {
     // 값이 전부 숫자인 enum(예: duration "5"/"10")도 여기서 슬라이더로 그립니다.
-    const discrete = param.values?.map((v) => Number(v)).filter((v) => Number.isFinite(v));
+    const discreteOptions = param.values
+      ?.map((raw) => ({ raw, numeric: numericParamValue(raw) }))
+      .filter((item): item is { raw: string; numeric: number } => item.numeric !== null);
+    const discrete = discreteOptions?.map((item) => item.numeric);
     const step = param.step ?? (discrete && discrete.length > 1 ? undefined : 1);
-    const current = typeof value === "number" ? value : (param.default as number | undefined) ?? param.min;
+    const requested = value ?? param.default;
+    const requestedNumber = numericParamValue(requested);
+    const current = requestedNumber !== null
+      && requestedNumber >= param.min
+      && requestedNumber <= param.max
+      && (!discrete || discrete.includes(requestedNumber))
+      ? requestedNumber
+      : numericParamValue(param.default) ?? param.min;
+    const displayValue = discreteOptions?.find((item) => item.numeric === current)?.raw ?? current;
     return (
       <label className="param-row">
         <span className="param-label">{label}</span>
@@ -82,17 +102,20 @@ function ParamControl({
             onChange={(event) => {
               const raw = Number(event.target.value);
               const snapped = discrete && discrete.length > 0 ? nearestAllowed(raw, discrete) : raw;
-              onChange(snapped);
+              const original = discreteOptions?.find((item) => item.numeric === snapped)?.raw;
+              onChange(original ?? snapped);
             }}
           />
-          <span className="param-value">{current}</span>
+          <span className="param-value">{displayValue}</span>
         </div>
       </label>
     );
   }
 
   if (param.kind === "enum" && param.values && param.values.length > 0) {
-    const current = typeof value === "string" ? value : (param.default as string | undefined) ?? "";
+    const requested = typeof value === "string" ? value : undefined;
+    const fallback = typeof param.default === "string" && param.values.includes(param.default) ? param.default : "";
+    const current = requested && param.values.includes(requested) ? requested : fallback;
     return (
       <label className="param-row">
         <span className="param-label">{label}</span>

@@ -1,11 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {
+  DynamicParamsPanel,
+  type ParamValues,
+} from "@/components/DynamicParams";
 import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
-import { AttachStrip, FileChip, ModelChip, ModelDetail, SendButton } from "@/components/studio-ui";
-import { MAX_VIDEO_BYTES, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
+import { AttachStrip, FileChip, ModelChip, ModelDetail, NewSessionButton, SendButton } from "@/components/studio-ui";
+import { MAX_VIDEO_BYTES, needsVideoCompression, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { resolveVideoAttachmentPolicy } from "@/lib/attachment-policy";
+import { filterSupportedParamValues } from "@/lib/models";
 
 const POLL_INTERVAL_MS = 5000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -20,8 +25,10 @@ export default function VideoPage() {
   const [prompt, setPrompt] = useStudioState<string>("video:prompt", "");
   const [startImage, setStartImage] = useStudioState<AttachedFile | null>("video:startImage", null);
   const [sourceVideo, setSourceVideo] = useStudioState<AttachedFile | null>("video:sourceVideo", null);
+  const [paramValues, setParamValues] = useStudioState<ParamValues>("video:params", {});
   const [results, setResults] = useStudioState<VideoResult[]>("video:results", []);
   const [busy, setBusy] = useState(false);
+  const [compressingVideo, setCompressingVideo] = useState(false);
   const [status, setStatus] = useState("");
   const [estimate, setEstimate] = useState<{ amount: number; currency: string | null; actual: boolean } | null>(null);
   const [error, setError] = useState("");
@@ -41,6 +48,15 @@ export default function VideoPage() {
   // 예상 비용을 보여 줍니다(공개하지 않는 모델은 표시하지 않습니다).
   const unitPrice = models.selected?.pricing?.perRequest ?? null;
   const currency = models.selected?.pricing?.currency ?? null;
+
+  function changeParam(key: string, value: string | number | undefined) {
+    setParamValues((previous) => {
+      const next = { ...previous };
+      if (value === undefined) delete next[key];
+      else next[key] = value;
+      return next;
+    });
+  }
 
   async function pickStartImage(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -73,11 +89,24 @@ export default function VideoPage() {
       return;
     }
     try {
+      setCompressingVideo(needsVideoCompression(file));
       const uploaded = await uploadFiles([file]);
       setSourceVideo(uploaded[0] ?? null);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "영상 업로드에 실패했습니다.");
+    } finally {
+      setCompressingVideo(false);
     }
+  }
+
+  function startNewSession() {
+    setPrompt("");
+    setStartImage(null);
+    setSourceVideo(null);
+    setResults([]);
+    setStatus("");
+    setEstimate(null);
+    setError("");
   }
 
   async function generate() {
@@ -107,6 +136,7 @@ export default function VideoPage() {
           prompt: text,
           startImageId: supportsStartImage ? startImage?.id : undefined,
           sourceVideoId: supportsSourceVideo ? sourceVideo?.id : undefined,
+          params: filterSupportedParamValues(model.videoParams, paramValues),
         }),
       });
       const queueBody = await queueResponse.json().catch(() => ({}));
@@ -210,7 +240,15 @@ export default function VideoPage() {
     <div className="studio">
       <div className="studio-scroll">
         <div className="studio-inner">
+          <div className="studio-toolbar">
+            <NewSessionButton disabled={busy || compressingVideo} onClick={startNewSession} />
+          </div>
           <ModelDetail hook={models} />
+          <DynamicParamsPanel
+            params={models.selected?.videoParams ?? []}
+            values={paramValues}
+            onChange={changeParam}
+          />
 
           {results.length === 0 ? (
             <div className="studio-hero">
@@ -271,13 +309,18 @@ export default function VideoPage() {
               if (sourceVideo?.id === id) setSourceVideo(null);
             }}
           />
+          {compressingVideo ? (
+            <div className="progress-note dock-alert">
+              <span className="spinner" /> 큰 동영상을 4.5MB 미만으로 압축하고 있습니다…
+            </div>
+          ) : null}
           {error ? <div className="error-box dock-alert">{error}</div> : null}
           <div className="dock-row">
             <ModelChip hook={models} />
             <FileChip
               label={`시작 이미지 ${startImage ? 1 : 0}/${maxStartImages}`}
               accept="image/*"
-              disabled={!supportsStartImage}
+              disabled={!supportsStartImage || compressingVideo}
               onPick={pickStartImage}
               title={supportsStartImage ? "시작 이미지 첨부" : "이 모델은 시작 이미지를 지원하지 않습니다"}
             />
@@ -285,6 +328,7 @@ export default function VideoPage() {
               <FileChip
                 label={`원본 영상 ${sourceVideo ? 1 : 0}/${policy.sourceVideo.max}`}
                 accept="video/*"
+                disabled={compressingVideo}
                 onPick={pickSourceVideo}
                 title="확장·편집할 원본 영상 첨부"
               />
@@ -295,7 +339,7 @@ export default function VideoPage() {
                 시작 이미지는 전송되지 않습니다
               </span>
             ) : null}
-            <SendButton disabled={busy || !prompt.trim()} onClick={generate} label="영상 생성" />
+            <SendButton disabled={busy || compressingVideo || !prompt.trim()} onClick={generate} label="영상 생성" />
           </div>
         </div>
       </div>

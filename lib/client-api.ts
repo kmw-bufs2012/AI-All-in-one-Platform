@@ -14,6 +14,125 @@ export interface AttachedFile {
 
 export const MAX_IMAGES = 10;
 export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+export const VIDEO_COMPRESSION_LIMIT_BYTES = Math.floor(4.5 * 1024 * 1024);
+const VIDEO_COMPRESSION_TARGET_BYTES = 4 * 1024 * 1024;
+
+export function needsVideoCompression(file: File): boolean {
+  return file.type.startsWith("video/") && file.size >= VIDEO_COMPRESSION_LIMIT_BYTES;
+}
+
+function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
+  return new Promise((resolve, reject) => {
+    video.onloadedmetadata = () => resolve();
+    video.onerror = () => reject(new Error("동영상을 읽을 수 없습니다."));
+  });
+}
+
+function supportedRecorderMime(): string | null {
+  if (typeof MediaRecorder === "undefined") return null;
+  return ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"].find((mime) =>
+    MediaRecorder.isTypeSupported(mime),
+  ) ?? null;
+}
+
+async function transcodeVideo(file: File, targetBytes: number): Promise<File> {
+  const mimeType = supportedRecorderMime();
+  if (!mimeType || typeof AudioContext === "undefined") {
+    throw new Error("이 브라우저는 동영상 자동 압축을 지원하지 않습니다. Chrome 또는 Edge에서 다시 시도해 주세요.");
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.src = objectUrl;
+  video.preload = "auto";
+  video.playsInline = true;
+  await waitForVideoMetadata(video);
+
+  const duration = video.duration;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    URL.revokeObjectURL(objectUrl);
+    throw new Error("동영상 길이를 확인할 수 없어 압축하지 못했습니다.");
+  }
+
+  const maxWidth = 1280;
+  const maxHeight = 720;
+  const scale = Math.min(1, maxWidth / Math.max(video.videoWidth, 1), maxHeight / Math.max(video.videoHeight, 1));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(2, Math.floor((video.videoWidth * scale) / 2) * 2);
+  canvas.height = Math.max(2, Math.floor((video.videoHeight * scale) / 2) * 2);
+  const context = canvas.getContext("2d");
+  if (!context) {
+    URL.revokeObjectURL(objectUrl);
+    throw new Error("동영상 압축 화면을 준비하지 못했습니다.");
+  }
+
+  const canvasStream = canvas.captureStream(24);
+  const audioContext = new AudioContext();
+  const audioSource = audioContext.createMediaElementSource(video);
+  const audioDestination = audioContext.createMediaStreamDestination();
+  audioSource.connect(audioDestination);
+  for (const track of audioDestination.stream.getAudioTracks()) canvasStream.addTrack(track);
+
+  // 컨테이너 오버헤드를 위해 목표 용량의 88%만 비트레이트 예산으로 사용합니다.
+  const totalBitsPerSecond = Math.max(48_000, Math.floor((targetBytes * 8 * 0.88) / duration));
+  const audioBitsPerSecond = Math.min(64_000, Math.max(24_000, Math.floor(totalBitsPerSecond * 0.12)));
+  const videoBitsPerSecond = Math.max(24_000, Math.min(2_500_000, totalBitsPerSecond - audioBitsPerSecond));
+  const chunks: Blob[] = [];
+  const recorder = new MediaRecorder(canvasStream, { mimeType, videoBitsPerSecond, audioBitsPerSecond });
+
+  let animationFrame = 0;
+  const drawFrame = () => {
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    if (!video.ended && !video.paused) animationFrame = requestAnimationFrame(drawFrame);
+  };
+
+  try {
+    await audioContext.resume();
+    video.currentTime = 0;
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    const stopped = new Promise<void>((resolve, reject) => {
+      recorder.onstop = () => resolve();
+      recorder.onerror = () => reject(new Error("동영상 압축 중 오류가 발생했습니다."));
+    });
+    const ended = new Promise<void>((resolve, reject) => {
+      video.onended = () => resolve();
+      video.onerror = () => reject(new Error("동영상 압축 중 원본을 읽지 못했습니다."));
+    });
+
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    recorder.start(1000);
+    await video.play();
+    drawFrame();
+    await ended;
+    if (recorder.state !== "inactive") recorder.stop();
+    await stopped;
+
+    const blob = new Blob(chunks, { type: mimeType });
+    const baseName = file.name.replace(/\.[^.]+$/, "");
+    return new File([blob], `${baseName}-compressed.webm`, { type: "video/webm", lastModified: Date.now() });
+  } finally {
+    cancelAnimationFrame(animationFrame);
+    video.pause();
+    for (const track of canvasStream.getTracks()) track.stop();
+    await audioContext.close().catch(() => {});
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+/** 4.5MB 이상인 동영상을 브라우저에서 4.5MB 미만 WebM으로 변환합니다. */
+export async function compressVideoForUpload(file: File): Promise<File> {
+  if (!needsVideoCompression(file)) return file;
+  let compressed = await transcodeVideo(file, VIDEO_COMPRESSION_TARGET_BYTES);
+  if (compressed.size >= VIDEO_COMPRESSION_LIMIT_BYTES) {
+    compressed = await transcodeVideo(file, Math.floor(VIDEO_COMPRESSION_TARGET_BYTES * 0.72));
+  }
+  if (compressed.size >= VIDEO_COMPRESSION_LIMIT_BYTES) {
+    throw new Error("동영상을 4.5MB 미만으로 압축하지 못했습니다. 더 짧거나 작은 동영상을 선택해 주세요.");
+  }
+  return compressed;
+}
 
 /** 업로드 전에 긴 변을 1024px로 맞춰 전송량을 줄입니다. */
 export async function downscaleImage(file: File): Promise<File> {
@@ -90,7 +209,9 @@ export async function uploadFiles(
 ): Promise<AttachedFile[]> {
   const prepared: File[] = [];
   for (const file of files) {
-    prepared.push(file.type.startsWith("image/") ? await downscaleImage(file) : file);
+    if (file.type.startsWith("image/")) prepared.push(await downscaleImage(file));
+    else if (needsVideoCompression(file)) prepared.push(await compressVideoForUpload(file));
+    else prepared.push(file);
   }
   const uploaded: AttachedFile[] = [];
   for (let i = 0; i < prepared.length; i++) {

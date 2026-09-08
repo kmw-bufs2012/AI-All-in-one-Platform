@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { modelDisplayLabel } from "@/lib/models";
 import type { AttachedFile } from "@/lib/client-api";
 import { Icon, type IconName } from "./Icon";
@@ -117,9 +117,48 @@ export function SendButton({ disabled, onClick, label }: { disabled: boolean; on
   );
 }
 
+export function NewSessionButton({ disabled, onClick }: { disabled?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="secondary new-session-button"
+      onClick={onClick}
+      disabled={disabled}
+      title="현재 화면을 비우고 새 세션 시작"
+    >
+      <Icon name="plus" size={14} />
+      새 세션
+    </button>
+  );
+}
+
 /* --------------------------------------------------------------- 모델 */
 
+const MODEL_SEARCH_ALIASES: Record<string, string[]> = {
+  "애니": ["anime", "animated", "animagine"],
+  "애니메이션": ["anime", "animated", "animation", "animagine"],
+  "실사": ["realistic", "realism", "photorealistic", "photo-realistic"],
+  "사진": ["photo", "photographic", "photorealistic"],
+  "만화": ["comic", "manga"],
+  "코믹": ["comic"],
+  "지브리": ["ghibli", "ghiblify"],
+  "사이버펑크": ["cyberpunk"],
+};
+
 export function ModelChip({ hook }: { hook: ModelsHook }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (!pickerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
   if (hook.loading) {
     return (
       <span className="chip" aria-live="polite">
@@ -135,14 +174,80 @@ export function ModelChip({ hook }: { hook: ModelsHook }) {
       </span>
     );
   }
+
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const searchTerms = [
+    normalizedQuery,
+    ...Object.entries(MODEL_SEARCH_ALIASES)
+      .filter(([korean]) => normalizedQuery.includes(korean))
+      .flatMap(([, aliases]) => aliases),
+  ].filter(Boolean);
+  const filtered = hook.models.filter((model) => {
+    if (!normalizedQuery) return true;
+    const searchable = [modelDisplayLabel(model), model.id, model.description]
+      .filter(Boolean)
+      .join(" ")
+      .toLocaleLowerCase();
+    return searchTerms.some((term) => searchable.includes(term));
+  });
+  const selectedLabel = hook.selected ? modelDisplayLabel(hook.selected) : "모델 선택";
+
   return (
-    <SelectChip
-      icon="sparkle"
-      title="모델 선택"
-      value={hook.selectedId}
-      onChange={(value) => hook.setSelectedId(value)}
-      options={hook.models.map((model) => ({ value: model.id, label: modelDisplayLabel(model) }))}
-    />
+    <div className="model-picker" ref={pickerRef}>
+      <button
+        type="button"
+        className="chip model-picker-trigger"
+        onClick={() => {
+          setOpen((previous) => !previous);
+          setQuery("");
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title="모델 선택 및 검색"
+      >
+        <span className="chip-icon"><Icon name="sparkle" size={14} /></span>
+        <span className="chip-text">{selectedLabel}</span>
+        <Icon name="chevronDown" size={12} />
+      </button>
+      {open ? (
+        <div className="model-picker-popover">
+          <label className="model-search-label">
+            <Icon name="search" size={14} />
+            <input
+              autoFocus
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setOpen(false);
+              }}
+              placeholder="모델명 또는 스타일 검색"
+              aria-label="모델명 또는 스타일 검색"
+            />
+          </label>
+          <div className="model-picker-results" role="listbox" aria-label="검색된 모델">
+            {filtered.length > 0 ? filtered.map((model) => (
+              <button
+                key={model.id}
+                type="button"
+                className={model.id === hook.selectedId ? "selected" : undefined}
+                role="option"
+                aria-selected={model.id === hook.selectedId}
+                onClick={() => {
+                  hook.setSelectedId(model.id);
+                  setOpen(false);
+                  setQuery("");
+                }}
+              >
+                <span>{modelDisplayLabel(model)}</span>
+                <small>{model.id}</small>
+              </button>
+            )) : <p>일치하는 모델이 없습니다.</p>}
+          </div>
+          <div className="model-picker-count">{filtered.length}개 모델</div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

@@ -11,12 +11,14 @@ import {
   Lightbox,
   ModelChip,
   ModelDetail,
+  NewSessionButton,
   SendButton,
   type LightboxContent,
 } from "@/components/studio-ui";
 import {
   MAX_VIDEO_BYTES,
   extractVideoFrames,
+  needsVideoCompression,
   recordJob,
   uploadFiles,
   type AttachedFile,
@@ -43,6 +45,7 @@ export default function ChatPage() {
   const [input, setInput] = useStudioState<string>("chat:input", "");
   const [attachments, setAttachments] = useStudioState<AttachedFile[]>("chat:attachments", []);
   const [sending, setSending] = useState(false);
+  const [compressingVideo, setCompressingVideo] = useState(false);
   const [error, setError] = useState("");
   const [lightbox, setLightbox] = useState<LightboxContent>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -115,11 +118,22 @@ export default function ChatPage() {
       }
     }
     try {
+      setCompressingVideo(files.some(needsVideoCompression));
       const uploaded = await uploadFiles(files);
       setAttachments((prev) => [...prev, ...uploaded]);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "동영상 업로드에 실패했습니다.");
+    } finally {
+      setCompressingVideo(false);
     }
+  }
+
+  function startNewSession() {
+    setMessages([]);
+    setInput("");
+    setAttachments([]);
+    setError("");
+    setLightbox(null);
   }
 
   async function pickAudios(event: React.ChangeEvent<HTMLInputElement>) {
@@ -407,6 +421,9 @@ export default function ChatPage() {
     <div className="studio">
       <div className="studio-scroll">
         <div className="studio-inner">
+          <div className="studio-toolbar">
+            <NewSessionButton disabled={sending || compressingVideo} onClick={startNewSession} />
+          </div>
           <ModelDetail hook={models} />
 
           {messages.length === 0 && !sending ? (
@@ -507,6 +524,11 @@ export default function ChatPage() {
             rows={1}
           />
           <AttachStrip files={attachments} onRemove={(id) => setAttachments((prev) => prev.filter((item) => item.id !== id))} />
+          {compressingVideo ? (
+            <div className="progress-note dock-alert">
+              <span className="spinner" /> 큰 동영상을 4.5MB 미만으로 압축하고 있습니다…
+            </div>
+          ) : null}
           {error ? <div className="error-box dock-alert">{error}</div> : null}
           <div className="dock-row">
             <ModelChip hook={models} />
@@ -514,7 +536,7 @@ export default function ChatPage() {
               label={`이미지 ${imageCount}/${policy.image.max}`}
               accept="image/*"
               multiple
-              disabled={!policy.image.allowed}
+              disabled={!policy.image.allowed || compressingVideo}
               onPick={pickImages}
               title={policy.image.allowed ? "이미지 첨부" : "이 모델은 이미지를 인식하지 못합니다"}
             />
@@ -522,7 +544,7 @@ export default function ChatPage() {
               label={`동영상 ${videoCount}/${policy.video.max}`}
               accept="video/*"
               multiple={policy.video.max > 1}
-              disabled={!policy.video.allowed}
+              disabled={!policy.video.allowed || compressingVideo}
               onPick={pickVideos}
               title={policy.video.allowed ? "동영상 첨부" : "이 모델은 동영상을 인식하지 못합니다"}
             />
@@ -530,7 +552,7 @@ export default function ChatPage() {
               label={`오디오 ${audioCount}/${policy.audio.max}`}
               accept="audio/*"
               multiple={policy.audio.max > 1}
-              disabled={!policy.audio.allowed}
+              disabled={!policy.audio.allowed || compressingVideo}
               onPick={pickAudios}
               title={policy.audio.allowed ? "오디오 첨부" : "이 모델은 오디오를 인식하지 못합니다"}
             />
@@ -538,7 +560,7 @@ export default function ChatPage() {
               label={`문서 ${docCount}/${policy.doc.max}`}
               accept={policy.docAccept}
               multiple
-              disabled={!policy.doc.allowed}
+              disabled={!policy.doc.allowed || compressingVideo}
               onPick={pickDoc}
               title={policy.pdfAllowed ? "문서 첨부 (txt·md·pdf)" : "문서 첨부 (txt·md)"}
             />
@@ -548,7 +570,7 @@ export default function ChatPage() {
                 {policy.note}
               </span>
             ) : null}
-            <SendButton disabled={sending || (!input.trim() && attachments.length === 0)} onClick={send} label="전송" />
+            <SendButton disabled={sending || compressingVideo || (!input.trim() && attachments.length === 0)} onClick={send} label="전송" />
           </div>
         </div>
       </div>
