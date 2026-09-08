@@ -33,6 +33,28 @@ export interface VoiceInfo {
   name: string;
 }
 
+/*
+ * 이미지·영상 생성 모델이 supported_parameters로 공개한 그 밖의 설정값입니다.
+ * NanoGPT 공식 문서: "Parameter support varies by model, and parameters
+ * should be treated as discoverable via supported_parameters, not as
+ * globally supported fields." 그래서 비율·품질·스타일(이미지), 해상도·품질
+ * (영상) 같은 값을 앱에 고정된 목록으로 두지 않고, 모델이 실제로 공개한
+ * 파라미터만 그대로 노출합니다. 참조 이미지·해상도·생성 장수처럼 이미 전용
+ * 필드가 있는 파라미터(resolution, n, imageUrl 등)는 제외됩니다.
+ */
+export interface ExtraParam {
+  /** NanoGPT에 보낼 때 쓰는 원래 파라미터 이름(예: aspect_ratio, quality, style, duration). */
+  key: string;
+  kind: "enum" | "range";
+  /** enum일 때 고를 수 있는 값 목록. */
+  values?: string[];
+  /** range이거나, 값이 전부 숫자인 enum일 때 슬라이더로 보여주기 위한 범위. */
+  min?: number;
+  max?: number;
+  step?: number;
+  default?: string | number | null;
+}
+
 export interface ModelPricing {
   inputPer1M: number | null;
   outputPer1M: number | null;
@@ -82,12 +104,16 @@ export interface NormalizedModel {
   defaultResolution: string | null;
   /** supported_parameters.n.max — 한 번에 생성할 수 있는 이미지 장수. */
   maxOutputImages: number;
+  /** resolution·n·참조 이미지 외에 모델이 공개한 나머지 설정(비율·품질·스타일 등). */
+  imageParams: ExtraParam[];
 
   /* ------------------------------------------------------- 영상 생성 모델 */
   /** imageUrl / imageDataUrl 을 받는 image-to-video 계열인지. null이면 미공개. */
   acceptsStartImage: boolean | null;
   /** videoUrl 을 받는 영상 확장·편집 계열인지. null이면 미공개. */
   acceptsSourceVideo: boolean | null;
+  /** 시작 이미지·원본 영상 외에 모델이 공개한 나머지 설정(길이·해상도·품질 등). */
+  videoParams: ExtraParam[];
 
   /* ------------------------------------------------------------ TTS 모델 */
   voices: VoiceInfo[];
@@ -189,6 +215,46 @@ function paramMax(params: SupportedParams, ...keys: string[]): number | null {
 
 function hasParam(params: SupportedParams, ...keys: string[]): boolean {
   return keys.some((key) => params.names.has(key.toLowerCase()));
+}
+
+/*
+ * "resolution" / "n" / 참조 이미지 / 시작 이미지·원본 영상처럼 이미 전용
+ * 필드로 뽑아 쓰는 파라미터를 뺀 나머지를 그대로 노출합니다. supported_parameters
+ * 가 문자열 배열(값 정의 없음)로만 온 경우는 컨트롤을 만들 수 없어 건너뜁니다.
+ */
+function extractExtraParams(params: SupportedParams, excludeKeys: Set<string>): ExtraParam[] {
+  const result: ExtraParam[] = [];
+  for (const [key, def] of Object.entries(params.defs)) {
+    if (excludeKeys.has(key)) continue;
+    const values = asStringArray(def.values ?? def.enum ?? def.options);
+    const min = asNumber(def.min ?? def.minimum);
+    const max = asNumber(def.max ?? def.maximum);
+    const step = asNumber(def.step);
+    const defaultValue = typeof def.default === "string" || typeof def.default === "number" ? def.default : null;
+    const declaredType = asString(def.type).toLowerCase();
+
+    if (min !== null && max !== null && (declaredType === "range" || declaredType === "number" || declaredType === "integer" || !declaredType)) {
+      result.push({ key, kind: "range", min, max, step: step ?? undefined, default: defaultValue });
+      continue;
+    }
+    if (values.length > 0) {
+      // 값이 전부 숫자면(예: duration "5"/"10") 마우스로 끄는 슬라이더로도 쓸 수 있게 범위를 함께 채워 둡니다.
+      const numericValues = values.map((v) => Number(v)).filter((v) => Number.isFinite(v));
+      if (numericValues.length === values.length && numericValues.length > 0) {
+        result.push({
+          key,
+          kind: "range",
+          min: Math.min(...numericValues),
+          max: Math.max(...numericValues),
+          values,
+          default: defaultValue,
+        });
+      } else {
+        result.push({ key, kind: "enum", values, default: defaultValue });
+      }
+    }
+  }
+  return result;
 }
 
 /*
@@ -373,6 +439,13 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const resolutions = paramValues(params, "resolution", "resolutions", "size", "sizes");
   const defaultResolution = paramDefault(params, "resolution", "size");
   const maxOutputImages = paramMax(params, "n", "num_images", "numImages") ?? 1;
+  // 이미 전용 필드로 뽑은 파라미터(해상도·장수·참조 이미지 계열)는 빼고, 나머지
+  // (비율·품질·스타일 등)를 모델별 설정 컨트롤로 그대로 넘깁니다.
+  const imageExclude = new Set([
+    "resolution", "resolutions", "size", "sizes", "n", "num_images", "numimages",
+    "input_references", "imagedataurl", "imagedataurls", "image_url", "images", "imageurl",
+  ]);
+  const imageParams = kind === "image" ? extractExtraParams(params, imageExclude) : [];
 
   /*
    * 영상 생성 입력. 모델이 받는 파라미터로 판정하되, supported_parameters 자체가
@@ -394,6 +467,13 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     : mentions(haystack, /extend|video[- ]?to[- ]?video|\bv2v\b/)
       ? true
       : paramsKnown ? false : null;
+  // 시작 이미지·원본 영상 입력 파라미터는 빼고, 나머지(길이·해상도·품질 등)를
+  // 모델별 설정 컨트롤로 그대로 넘깁니다.
+  const videoExclude = new Set([
+    "imageurl", "image_url", "imagedataurl", "image_data_url", "image", "input_references", "start_image", "init_image",
+    "videourl", "video_url", "videodataurl", "source_video",
+  ]);
+  const videoParams = kind === "video" ? extractExtraParams(params, videoExclude) : [];
 
   const voiceResult = extractVoices(raw, params);
   const supportedFormats = paramValues(params, "format", "response_format", "formats")
@@ -433,9 +513,11 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     resolutions,
     defaultResolution,
     maxOutputImages: Math.max(1, maxOutputImages),
+    imageParams,
 
     acceptsStartImage,
     acceptsSourceVideo,
+    videoParams,
 
     voices: voiceResult.voices,
     defaultVoice: voiceResult.defaultVoice,

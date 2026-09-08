@@ -58,11 +58,23 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(await upstream.arrayBuffer());
     const mime = upstream.headers.get("content-type") || "audio/mpeg";
     const relative = await saveGeneratedFile(buffer, mime);
+    // 이 엔드포인트는 JSON이 아니라 오디오 바이너리를 그대로 돌려주기 때문에,
+    // NanoGPT가 다른 엔드포인트처럼 실제 청구액을 본문에 싣는지 확인할 수
+    // 없습니다. 대신 흔히 쓰이는 응답 헤더 후보를 확인해, 있으면 실제 청구액을
+    // 쓰고 없으면 클라이언트가 카탈로그 단가로 추정합니다.
+    const headerCost = upstream.headers.get("x-cost")
+      ?? upstream.headers.get("x-nano-cost")
+      ?? upstream.headers.get("x-request-cost");
+    const parsedHeaderCost = headerCost !== null ? Number(headerCost) : null;
+    const cost = parsedHeaderCost !== null && Number.isFinite(parsedHeaderCost)
+      ? { amount: parsedHeaderCost, currency: upstream.headers.get("x-cost-currency") ?? "USD" }
+      : null;
     return NextResponse.json({
       ok: true,
       url: `/api/files/${relative}`,
       format: mime,
       size: buffer.length,
+      cost,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "NanoGPT 음성 생성에 실패했습니다.";

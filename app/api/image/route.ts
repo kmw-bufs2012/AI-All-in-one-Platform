@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { generateImage, politeNanoGptError, readJson } from "@/lib/nanogpt";
-import { extractImages } from "@/lib/extract";
+import { generateImage, politeNanoGptError, readJson, sanitizeExtraParams } from "@/lib/nanogpt";
+import { extractImages, extractCost } from "@/lib/extract";
 import { dataUrlToBuffer, saveGeneratedFile } from "@/lib/storage";
 import { resolveUploadPath, mimeFromPath, MAX_REFERENCE_BYTES } from "@/lib/attachments";
 
@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
     referenceIds?: unknown;
     resolution?: unknown;
     n?: unknown;
+    params?: unknown;
   };
   try {
     body = await request.json();
@@ -76,6 +77,13 @@ export async function POST(request: NextRequest) {
   if (count !== null && count > 1) {
     payload.n = count;
   }
+  // 비율·품질·스타일 등 모델이 supported_parameters로 공개한 나머지 설정.
+  // model/prompt/input_references/resolution/n은 이미 직접 채우므로 덮어쓰지 못하게 막습니다.
+  const extraParams = sanitizeExtraParams(
+    body.params,
+    new Set(["model", "prompt", "input_references", "resolution", "n", "size", "sizes"]),
+  );
+  Object.assign(payload, extraParams);
 
   try {
     const upstream = await generateImage(payload);
@@ -95,7 +103,16 @@ export async function POST(request: NextRequest) {
       const relative = await saveGeneratedFile(decoded.buffer, decoded.mime);
       urls.push(`/api/files/${relative}`);
     }
-    return NextResponse.json({ ok: true, urls, count: urls.length });
+    // NanoGPT 공식 문서: "Every API response includes a cost field showing
+    // what you were charged for that request" — 응답에 실제 청구액이 실려
+    // 있으면 카탈로그 추정 단가 대신 이 값을 그대로 보여 줍니다.
+    const cost = extractCost(bodyText);
+    return NextResponse.json({
+      ok: true,
+      urls,
+      count: urls.length,
+      cost: cost ? { amount: cost.amount, currency: cost.currency ?? "USD" } : null,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "NanoGPT 이미지 생성에 실패했습니다.";
     const status = error instanceof Error && "status" in error ? Number((error as { status?: number }).status ?? 502) : 502;

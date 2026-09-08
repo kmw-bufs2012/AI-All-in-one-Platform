@@ -110,7 +110,12 @@ function tryCreateUploadRoot(candidate: string): boolean {
 
 export function uploadRoot(): string {
   if (cachedUploadRoot) return cachedUploadRoot;
-  for (const candidate of uploadRootCandidates()) {
+  for (const rawCandidate of uploadRootCandidates()) {
+    // UPLOAD_DIR("./uploads" 등)이 상대 경로면 resolveUploadPath()의 경로 탈출
+    // 방지 검사(target.startsWith(root + sep))가 절대 경로로 정규화된 target과
+    // 어긋나 항상 실패합니다(모든 파일 요청이 "경로가 올바르지 않습니다"로
+    // 거부됨). 캐싱 전에 항상 절대 경로로 고정합니다.
+    const candidate = path.resolve(rawCandidate);
     if (tryCreateUploadRoot(candidate)) {
       cachedUploadRoot = candidate;
       return candidate;

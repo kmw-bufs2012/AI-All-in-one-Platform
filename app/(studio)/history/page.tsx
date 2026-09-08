@@ -26,6 +26,8 @@ interface Job {
   unitPrice: unknown;
   cost: number | null;
   currency: string | null;
+  /** "actual"(NanoGPT가 실제로 청구한 금액) | "estimated"(모델 카탈로그 단가로 계산한 추정치). */
+  costSource: string | null;
   status: string;
   result: JobResult | null;
   createdAt: string;
@@ -35,6 +37,40 @@ const MODE_LABELS: Record<string, string> = { chat: "채팅", image: "이미지"
 
 function formatCostValue(cost: number, currency: string | null): string {
   return `${currency ?? "USD"} ${cost < 0.01 ? cost.toFixed(6) : cost.toFixed(4)}`;
+}
+
+/*
+ * 결과물 단가 총 합계. NanoGPT가 실제로 청구한 금액(costSource === "actual")이
+ * 있는 작업은 그대로 더하고, 없는 작업은 카탈로그 단가 기반 추정치로 더합니다.
+ * 통화가 여러 개 섞일 가능성은 낮지만(NanoGPT는 USD 단일 통화), 방어적으로
+ * 통화별로 따로 합산합니다.
+ */
+function summarizeCosts(jobs: Job[]): {
+  totals: Array<{ currency: string; actual: number; estimated: number; hasEstimate: boolean }>;
+  countedJobs: number;
+  uncountedJobs: number;
+} {
+  const byCurrency = new Map<string, { actual: number; estimated: number; hasEstimate: boolean }>();
+  let countedJobs = 0;
+  let uncountedJobs = 0;
+  for (const job of jobs) {
+    if (job.cost === null) {
+      uncountedJobs += 1;
+      continue;
+    }
+    countedJobs += 1;
+    const currency = job.currency ?? "USD";
+    const entry = byCurrency.get(currency) ?? { actual: 0, estimated: 0, hasEstimate: false };
+    if (job.costSource === "actual") {
+      entry.actual += job.cost;
+    } else {
+      entry.estimated += job.cost;
+      entry.hasEstimate = true;
+    }
+    byCurrency.set(currency, entry);
+  }
+  const totals = Array.from(byCurrency.entries()).map(([currency, value]) => ({ currency, ...value }));
+  return { totals, countedJobs, uncountedJobs };
 }
 
 export default function HistoryPage() {
@@ -121,6 +157,7 @@ export default function HistoryPage() {
         </div>
       ) : null}
       {!loading && jobs.length === 0 ? <div className="empty-note">조회된 작업 기록이 없습니다.</div> : null}
+      {!loading && jobs.length > 0 ? <CostSummary jobs={jobs} /> : null}
 
       <div className="job-list">
         {jobs.map((job) => (
@@ -149,11 +186,15 @@ export default function HistoryPage() {
               <div className="cost-line">
                 사용량: 입력 {job.usage.promptTokens ?? 0} · 출력 {job.usage.completionTokens ?? 0} · 합계{" "}
                 {job.usage.totalTokens ?? 0} 토큰{job.usage.estimated ? " (추정)" : ""}
-                {job.cost !== null ? ` · 비용: ${formatCostValue(job.cost, job.currency)}` : " · 비용: 정보 없음"}
+                {job.cost !== null
+                  ? ` · 비용: ${formatCostValue(job.cost, job.currency)}${job.costSource === "actual" ? "" : " (추정)"}`
+                  : " · 비용: 정보 없음"}
               </div>
             ) : (
               <div className="cost-line">
-                {job.cost !== null ? `비용: ${formatCostValue(job.cost, job.currency)}` : "비용 정보 없음"}
+                {job.cost !== null
+                  ? `비용: ${formatCostValue(job.cost, job.currency)}${job.costSource === "actual" ? "" : " (추정)"}`
+                  : "비용 정보 없음"}
               </div>
             )}
             {job.result ? (
@@ -181,6 +222,42 @@ export default function HistoryPage() {
       </div>
 
       <Lightbox src={lightbox} onClose={() => setLightbox(null)} />
+    </div>
+  );
+}
+
+function CostSummary({ jobs }: { jobs: Job[] }) {
+  const { totals, countedJobs, uncountedJobs } = summarizeCosts(jobs);
+  if (totals.length === 0) {
+    return (
+      <div className="cost-summary">
+        <span className="cost-summary-label">현재 조회된 {jobs.length}건에는 비용 정보가 없습니다.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="cost-summary">
+      <span className="cost-summary-label">결과물 단가 총 합계 ({countedJobs}건 반영)</span>
+      <div className="cost-summary-values">
+        {totals.map(({ currency, actual, estimated, hasEstimate }) => {
+          const total = actual + estimated;
+          return (
+            <span key={currency} className="cost-summary-value">
+              {formatCostValue(total, currency)}
+              {hasEstimate ? (
+                actual > 0 ? (
+                  <span className="cost-summary-note"> (실제 청구 {formatCostValue(actual, currency)} + 추정 {formatCostValue(estimated, currency)})</span>
+                ) : (
+                  <span className="cost-summary-note"> (전액 추정치)</span>
+                )
+              ) : null}
+            </span>
+          );
+        })}
+      </div>
+      {uncountedJobs > 0 ? (
+        <span className="cost-summary-note">비용 정보가 없는 {uncountedJobs}건은 합계에서 제외했습니다.</span>
+      ) : null}
     </div>
   );
 }

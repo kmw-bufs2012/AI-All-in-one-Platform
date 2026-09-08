@@ -65,6 +65,12 @@ export default function AudioPage() {
         const label = voices.find((item) => item.id === activeVoice)?.name ?? activeVoice;
         setResults((prev) => [{ url, text, voice: label }, ...prev]);
       }
+      // TTS는 오디오 바이너리로 응답해 청구액이 응답 헤더로만 확인될 수 있어
+      // (있으면 서버가 body.cost로 넘겨줍니다), 없을 때만 카탈로그 단가로 추정합니다.
+      const actualCost = body.cost as { amount: number; currency: string | null } | null;
+      const estimatedAmount = model.pricing?.perRequest ?? null;
+      const finalAmount = actualCost?.amount ?? estimatedAmount;
+      const finalCurrency = actualCost?.currency ?? model.pricing?.currency ?? null;
       recordJob({
         mode: "audio",
         model: model.id,
@@ -72,8 +78,9 @@ export default function AudioPage() {
         attachments: [],
         usage: null,
         unitPrice: model.pricing,
-        cost: null,
-        currency: null,
+        cost: finalAmount,
+        currency: finalCurrency,
+        costSource: actualCost ? "actual" : finalAmount !== null ? "estimated" : null,
         status: "completed",
         result: { kind: "audio", urls: url ? [url] : [] },
       });

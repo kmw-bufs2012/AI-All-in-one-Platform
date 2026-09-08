@@ -1,9 +1,17 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { modelDisplayLabel } from "@/lib/models";
 import type { AttachedFile } from "@/lib/client-api";
 import { Icon, type IconName } from "./Icon";
 import type { ModelsHook } from "./useModels";
+
+export function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
 
 /* ------------------------------------------------------------------ 칩 */
 
@@ -161,42 +169,167 @@ export function ModelDetail({ hook }: { hook: ModelsHook }) {
 
 /* --------------------------------------------------------------- 첨부 */
 
+const AUDIO_KIND_ICON: Record<string, IconName> = { doc: "doc", audio: "audio" };
+
 export function AttachStrip({
   files,
   onRemove,
+  onPreview,
 }: {
   files: AttachedFile[];
   onRemove: (id: string) => void;
+  /** 생략하면 자기 자신을 라이트박스로 미리보기합니다. */
+  onPreview?: (file: AttachedFile) => void;
 }) {
+  const [internalPreview, setInternalPreview] = useState<AttachedFile | null>(null);
   if (files.length === 0) return null;
+  const preview = onPreview ?? setInternalPreview;
   return (
-    <div className="attach-strip">
-      {files.map((file) => (
-        <div key={file.id} className="attach-chip">
-          {file.kind === "image" ? <img src={file.url} alt={file.name} /> : null}
-          {file.kind === "video" ? <video src={file.url} preload="metadata" /> : null}
-          {file.kind === "doc" ? (
-            <span style={{ color: "var(--text-faint)", display: "grid", placeItems: "center", width: 30, height: 30 }}>
-              <Icon name="doc" size={16} />
-            </span>
-          ) : null}
-          <span className="chip-name">{file.name}</span>
-          <button type="button" className="chip-remove" aria-label={`${file.name} 첨부 제거`} onClick={() => onRemove(file.id)}>
-            <Icon name="close" size={13} />
-          </button>
-        </div>
-      ))}
-    </div>
+    <>
+      <div className="attach-strip">
+        {files.map((file) => (
+          <div key={file.id} className="attach-chip">
+            {file.kind === "image" || file.kind === "video" ? (
+              <button
+                type="button"
+                className="attach-chip-preview"
+                onClick={() => preview(file)}
+                aria-label={`${file.name} 미리보기`}
+                title="클릭해서 크게 보기"
+              >
+                {file.kind === "image" ? <img src={file.url} alt={file.name} /> : <video src={file.url} preload="metadata" />}
+              </button>
+            ) : (
+              <span className="attach-chip-doc-icon">
+                <Icon name={AUDIO_KIND_ICON[file.kind] ?? "doc"} size={16} />
+              </span>
+            )}
+            <button
+              type="button"
+              className="chip-name-group"
+              onClick={() => preview(file)}
+              title="클릭해서 자세히 보기"
+            >
+              <span className="chip-name">{file.name}</span>
+              <span className="chip-size">{formatFileSize(file.size)}</span>
+            </button>
+            <button type="button" className="chip-remove" aria-label={`${file.name} 첨부 제거`} onClick={() => onRemove(file.id)}>
+              <Icon name="close" size={13} />
+            </button>
+          </div>
+        ))}
+      </div>
+      {onPreview ? null : (
+        <Lightbox content={internalPreview} onClose={() => setInternalPreview(null)} />
+      )}
+    </>
   );
 }
 
 /* ----------------------------------------------------------- 라이트박스 */
 
-export function Lightbox({ src, onClose }: { src: string | null; onClose: () => void }) {
-  if (!src) return null;
+export interface LightboxFile {
+  url: string;
+  kind: "image" | "video" | "audio" | "doc";
+  name?: string;
+  mime?: string;
+  size?: number;
+}
+
+export type LightboxContent = string | LightboxFile | null;
+
+const TEXT_PREVIEW_MIMES = new Set(["text/plain", "text/markdown"]);
+const TEXT_PREVIEW_LIMIT = 8000;
+
+function DocPreviewBody({ file }: { file: LightboxFile }) {
+  const isPdf = file.mime === "application/pdf" || file.url.toLowerCase().endsWith(".pdf");
+  const isText = file.mime ? TEXT_PREVIEW_MIMES.has(file.mime) : /\.(txt|md)$/i.test(file.url);
+  const [text, setText] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!isText) return;
+    let cancelled = false;
+    fetch(file.url)
+      .then((response) => {
+        if (!response.ok) throw new Error();
+        return response.text();
+      })
+      .then((body) => {
+        if (cancelled) return;
+        setText(body.slice(0, TEXT_PREVIEW_LIMIT));
+      })
+      .catch(() => {
+        if (!cancelled) setError("문서 내용을 불러오지 못했습니다.");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file.url, isText]);
+
+  if (isPdf) {
+    return <iframe src={file.url} title={file.name ?? "PDF 미리보기"} />;
+  }
+  if (isText) {
+    if (error) return <p className="doc-hint">{error}</p>;
+    if (text === null) return <p className="doc-hint">문서를 불러오는 중…</p>;
+    return (
+      <pre>
+        {text}
+        {text.length >= TEXT_PREVIEW_LIMIT ? "\n\n… (내용이 길어 일부만 표시)" : ""}
+      </pre>
+    );
+  }
+  return <p className="doc-hint">이 형식은 화면에서 바로 미리 볼 수 없습니다. 새 창에서 열어 확인해 주세요.</p>;
+}
+
+export function Lightbox({
+  content,
+  src,
+  onClose,
+}: {
+  /** 새 코드는 content(문자열 또는 LightboxFile)를 씁니다. */
+  content?: LightboxContent;
+  /** 기존 호출부 호환용 — 이미지 URL 문자열만 받습니다. */
+  src?: string | null;
+  onClose: () => void;
+}) {
+  const raw = content !== undefined ? content : (src ?? null);
+  if (!raw) return null;
+  const file: LightboxFile = typeof raw === "string" ? { url: raw, kind: "image" } : raw;
+
+  if (file.kind === "doc" || file.kind === "audio") {
+    return (
+      <div className="lightbox" onClick={onClose} role="dialog" aria-modal="true" aria-label="첨부 미리보기">
+        <div className="lightbox-doc" onClick={(event) => event.stopPropagation()}>
+          <div className="lightbox-doc-head">
+            <Icon name={file.kind === "audio" ? "audio" : "doc"} size={16} />
+            <span className="doc-title">{file.name ?? "첨부 파일"}</span>
+            {file.size !== undefined ? <span className="doc-meta">{formatFileSize(file.size)}</span> : null}
+            <a href={file.url} target="_blank" rel="noreferrer" className="chip" style={{ flex: "none" }}>
+              새 창에서 열기
+            </a>
+          </div>
+          <div className="lightbox-doc-body">
+            {file.kind === "audio" ? (
+              <audio src={file.url} controls preload="metadata" style={{ width: "100%" }} />
+            ) : (
+              <DocPreviewBody file={file} />
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="lightbox" onClick={onClose} role="dialog" aria-modal="true" aria-label="확대 보기">
-      <img src={src} alt="확대 보기" />
+      {file.kind === "video" ? (
+        <video src={file.url} controls autoPlay onClick={(event) => event.stopPropagation()} />
+      ) : (
+        <img src={file.url} alt={file.name ?? "확대 보기"} />
+      )}
     </div>
   );
 }

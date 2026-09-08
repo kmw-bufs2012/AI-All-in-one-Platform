@@ -31,7 +31,8 @@ export type IconName =
   | "voice"
   | "logout"
   | "check"
-  | "doc";
+  | "doc"
+  | "chevronDown";
 
 const PATHS: Record<IconName, React.ReactNode> = {
   home: <path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4v-5h-6v5H5a1 1 0 0 1-1-1z" />,
@@ -93,6 +94,7 @@ const PATHS: Record<IconName, React.ReactNode> = {
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
   arrowRight: <path d="M5 12h13m-5-5 5 5-5 5" />,
   arrowUp: <path d="M12 19V5m-6 6 6-6 6 6" />,
+  chevronDown: <path d="m6 9 6 6 6-6" />,
   plus: <path d="M12 5v14M5 12h14" />,
   close: <path d="m6 6 12 12M18 6 6 18" />,
   download: <path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19.5h14" />,

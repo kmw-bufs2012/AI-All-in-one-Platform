@@ -103,12 +103,14 @@ export default function ImagePage() {
       if (!response.ok) throw new Error(body.error || "이미지 생성에 실패했습니다.");
       const urls: string[] = Array.isArray(body.urls) ? body.urls : [];
       setResults((prev) => [...urls, ...prev]);
-      // NanoGPT 이미지 모델은 카탈로그에 장당 단가를 공개하는 경우가 있어 그 값으로 계산합니다.
-      setCostLine(
-        unitPrice !== null
-          ? formatCost(unitPrice * Math.max(urls.length, 1), models.selected?.pricing?.currency ?? null)
-          : formatCost(null, null),
-      );
+      // NanoGPT 응답에 실제 청구액(cost)이 실려 있으면 그 값을 그대로 쓰고,
+      // 없을 때만 카탈로그 단가로 추정합니다(공식 문서: 응답마다 cost 필드가
+      // 실제 청구액을 담아 옵니다).
+      const actualCost = body.cost as { amount: number; currency: string | null } | null;
+      const estimatedAmount = unitPrice !== null ? unitPrice * Math.max(urls.length, 1) : null;
+      const finalAmount = actualCost?.amount ?? estimatedAmount;
+      const finalCurrency = actualCost?.currency ?? models.selected?.pricing?.currency ?? null;
+      setCostLine(formatCost(finalAmount, finalCurrency));
       recordJob({
         mode: "image",
         model: model.id,
@@ -116,8 +118,9 @@ export default function ImagePage() {
         attachments: refs,
         usage: null,
         unitPrice: model.pricing,
-        cost: unitPrice !== null ? unitPrice * Math.max(urls.length, 1) : null,
-        currency: model.pricing?.currency ?? null,
+        cost: finalAmount,
+        currency: finalCurrency,
+        costSource: actualCost ? "actual" : finalAmount !== null ? "estimated" : null,
         status: "completed",
         result: { kind: "images", urls },
       });
