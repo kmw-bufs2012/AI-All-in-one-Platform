@@ -3,24 +3,23 @@ import os from "node:os";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 
 /*
- * 값은 Venice.ai 공식 OpenAPI 스키마(swagger.yaml) 기준입니다.
+ * 첨부 한계값. NanoGPT 공식 API 문서(docs.nano-gpt.com, 2026-09 확인) 기준입니다.
  *
- * - MAX_IMAGES(10) — capabilities.maxImages 의 예시 값이자, 이 앱이 한 요청에
- *   보내는 안전 상한. 개별 모델 상한은 model_spec.capabilities.maxImages 를
- *   우선 사용합니다(lib/attachment-policy.ts).
- * - MAX_VIDEO_FILES(3) — 채팅의 video_url 콘텐츠 파트는 API 차원에서
- *   "At most 3 videos may be provided in one request" 로 제한됩니다.
- * - MAX_DOCS(5) — file 콘텐츠 파트는 공식 문서에 개수 제한이 없고("You can
- *   include more than one file block"), 25MB/파일 제한만 있습니다. 5개는 이
- *   앱의 안전 상한입니다.
- * - MAX_DOC_BYTES(25MB) — 공식 문서: "The maximum file size is 25MB per file"
- *   및 PayloadTooLargeError("File exceeds the maximum allowed size of 25 MB").
- * - MAX_VIDEO_BYTES(50MB) — 공식 문서의 reference video 제한(≤50 MB)을 준용.
- * - MAX_IMAGE_BYTES(10MB) — 앱 안전 상한. 단, style_references 는 공식 스키마가
- *   "Must be less than 8MB" 라고 명시하므로 이미지 페이지에서 8MB로 별도 제한합니다.
+ * - MAX_IMAGES / MAX_VIDEO_FILES / MAX_AUDIO_FILES / MAX_DOCS — 채팅 요청당
+ *   앱 안전 상한입니다. NanoGPT 모델 카탈로그는 채팅 첨부의 "가능 여부"만
+ *   공개하고(capabilities.vision / video_input / audio_input / pdf_upload)
+ *   개수 상한은 공개하지 않기 때문에, 종류별 허용 여부만 모델에서 읽고
+ *   개수는 여기 값을 씁니다(lib/attachment-policy.ts).
+ * - MAX_REFERENCE_BYTES(30MB) — 이미지 생성 참조 이미지의 상한.
+ *   Image API 의 input_reference_constraints.max_bytes 기본값(31457280)이며,
+ *   모델이 더 작은 값을 공개하면 그 값이 우선합니다.
+ * - MAX_DOC_BYTES / MAX_IMAGE_BYTES / MAX_VIDEO_BYTES — 업로드 단계에서
+ *   지나치게 큰 파일을 미리 걸러 내기 위한 앱 상한입니다.
  */
 export const MAX_IMAGES = 10;
 export const MAX_VIDEO_FILES = 3;
+export const MAX_AUDIO_FILES = 3;
+export const MAX_REFERENCE_BYTES = 30 * 1024 * 1024;
 export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_DOCS = 5;
@@ -30,6 +29,18 @@ export const DOC_MIME_TYPES = new Set([
   "text/plain",
   "text/markdown",
   "application/pdf",
+]);
+
+export const AUDIO_MIME_TYPES = new Set([
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/ogg",
+  "audio/opus",
+  "audio/flac",
+  "audio/mp4",
+  "audio/webm",
 ]);
 
 export const VIDEO_MIME_TYPES = new Set(["video/mp4", "video/mpeg", "video/webm", "video/quicktime"]);
@@ -42,12 +53,13 @@ export const IMAGE_MIME_TYPES = new Set([
   "image/avif",
 ]);
 
-export type AttachmentKind = "image" | "video" | "doc";
+export type AttachmentKind = "image" | "video" | "audio" | "doc";
 
 export function kindFromFile(name: string, mime: string): AttachmentKind | null {
   const lower = mime.toLowerCase();
   if (IMAGE_MIME_TYPES.has(lower) || (lower.startsWith("image/") && !lower.includes("svg"))) return "image";
   if (VIDEO_MIME_TYPES.has(lower) || lower.startsWith("video/")) return "video";
+  if (AUDIO_MIME_TYPES.has(lower) || lower.startsWith("audio/")) return "audio";
   const extension = path.extname(name).toLowerCase();
   if (DOC_MIME_TYPES.has(lower) || extension === ".txt" || extension === ".md" || extension === ".pdf") return "doc";
   return null;

@@ -5,7 +5,7 @@
 
 export interface AttachedFile {
   id: string;
-  kind: "image" | "video" | "doc";
+  kind: "image" | "video" | "audio" | "doc";
   name: string;
   size: number;
   mime: string;

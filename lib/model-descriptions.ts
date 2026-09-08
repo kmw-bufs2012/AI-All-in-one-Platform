@@ -1,10 +1,8 @@
 /*
  * 모델별 한글 설명 카탈로그.
  *
- * Venice.ai 공식 문서(https://docs.venice.ai/models/image · /models/video ·
- * /models/text-to-speech)와 공식 모델 카탈로그(veniceai/api-docs 의
- * data/static-models.json)를 근거로 작성했습니다. 모델 ID가 바뀌거나 새 모델이
- * 추가되면 API의 model_spec.description이 대신 사용됩니다.
+ * 모델 제공사의 공식 소개를 근거로 작성한 한글 요약입니다. 카탈로그에 없는
+ * 모델이거나 ID가 바뀌면 NanoGPT 카탈로그의 description 이 대신 사용됩니다.
  *
  * 채팅 모델(text)은 API 설명이 충실한 편이라 여기에 넣지 않고, 이미지·영상·
  * TTS 모델만 정리합니다.
@@ -46,7 +44,6 @@ const MODEL_DESCRIPTIONS: Record<string, string> = {
   "seedream-v4": "ByteDance Seedream V4. 사실적인 디테일과 조명 표현에 강한 이미지 생성 모델입니다.",
   "seedream-v5-lite": "Seedream V5 Lite. 속도를 우선하는 경량 버전입니다.",
   "seedream-v5-pro": "Seedream V5 Pro. 최신 Seedream의 고품질 프로 버전입니다.",
-  "venice-sd35": "Venice의 Stable Diffusion 3.5 기반 기본 이미지 모델. 넓은 호환성과 width/height 직접 지정을 지원합니다.",
   "wan-2-7-text-to-image": "Wan 2.7 텍스트-이미지 모델. 프롬프트 충실도 높은 고품질 생성을 지원합니다.",
   "wan-2-7-pro-text-to-image": "Wan 2.7 Pro 텍스트-이미지. 프로 품질로 디테일이 개선되었습니다.",
   "z-image-turbo": "Z-Image Turbo. 고속 생성에 최적화된 이미지 모델입니다.",

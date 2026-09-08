@@ -1,6 +1,11 @@
 const IMAGE_KEYS = ["images", "image", "data", "b64_json", "base64", "url"];
 const WRAPPER_KEYS = ["data", "result", "output", "generation"];
 const ID_KEYS = ["queue_id", "id", "request_id", "task_id", "job_id", "generation_id", "video_id", "uuid"];
+/* NanoGPT 영상 생성은 runId 를 돌려주고 그 값으로 /video/status 를 폴링합니다. */
+const RUN_ID_KEYS = ["runId", "run_id", "requestId", "request_id", "queue_id", "id", "task_id", "job_id"];
+/* 결과 영상 URL. 모델·제공자에 따라 키 이름이 달라 영상 전용 키를 먼저 봅니다. */
+const VIDEO_URL_KEYS = ["videoUrl", "video_url", "outputUrl", "output_url", "resultUrl", "result_url"];
+const GENERIC_URL_KEYS = ["url", "video", "output", "result"];
 const STATUS_KEYS = ["status", "state"];
 const COST_KEYS = ["estimated_cost", "cost", "price", "total_cost", "amount", "total"];
 const CURRENCY_KEYS = ["currency", "unit", "denomination"];
@@ -68,6 +73,34 @@ export function extractImages(body: unknown): string[] {
 export function extractId(body: unknown): string | null {
   const found = walk(body, ID_KEYS);
   return typeof found === "string" && found ? found : null;
+}
+
+export function extractRunId(body: unknown): string | null {
+  const found = walk(body, RUN_ID_KEYS);
+  return typeof found === "string" && found ? found : null;
+}
+
+function firstHttpUrl(value: unknown): string | null {
+  if (typeof value === "string") return /^https?:\/\//.test(value) ? value : null;
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = firstHttpUrl(entry);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (isObject(value)) {
+    for (const key of [...VIDEO_URL_KEYS, ...GENERIC_URL_KEYS]) {
+      const found = firstHttpUrl(value[key]);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+export function extractVideoUrl(body: unknown): string | null {
+  return firstHttpUrl(walk(body, VIDEO_URL_KEYS))
+    ?? firstHttpUrl(walk(body, GENERIC_URL_KEYS));
 }
 
 export function extractStatus(body: unknown): string | null {

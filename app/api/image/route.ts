@@ -1,13 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { generateImage, politeVeniceError, readJson } from "@/lib/venice";
+import { generateImage, politeNanoGptError, readJson } from "@/lib/nanogpt";
 import { extractImages } from "@/lib/extract";
 import { dataUrlToBuffer, saveGeneratedFile } from "@/lib/storage";
-import { resolveUploadPath, mimeFromPath } from "@/lib/attachments";
+import { resolveUploadPath, mimeFromPath, MAX_REFERENCE_BYTES } from "@/lib/attachments";
+
+/*
+ * NanoGPT Image API (POST /api/v1/images).
+ * 참조 이미지는 input_references 배열로 보냅니다. 공식 문서에 따르면
+ * imageDataUrl / imageDataUrls / image_url / images 같은 구형 별칭과 섞어
+ * 보내면 안 되므로 input_references 만 사용합니다. 장수 상한은 모델의
+ * input_reference_constraints.max_items 이며, 클라이언트에서 이미 검증하지만
+ * 서버에서도 방어적으로 자릅니다.
+ */
+const HARD_REFERENCE_LIMIT = 16;
 
 export async function POST(request: NextRequest) {
-  let body: { model?: unknown; prompt?: unknown; styleImageIds?: unknown; width?: unknown; height?: unknown };
+  let body: {
+    model?: unknown;
+    prompt?: unknown;
+    referenceIds?: unknown;
+    resolution?: unknown;
+    n?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
@@ -20,12 +36,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "모델과 프롬프트가 필요합니다." }, { status: 400 });
   }
 
-  const styleImageIds: string[] = Array.isArray(body.styleImageIds)
-    ? (body.styleImageIds as unknown[]).filter((id): id is string => typeof id === "string").slice(0, 10)
+  const referenceIds: string[] = Array.isArray(body.referenceIds)
+    ? (body.referenceIds as unknown[])
+        .filter((id): id is string => typeof id === "string")
+        .slice(0, HARD_REFERENCE_LIMIT)
     : [];
 
-  const styleReferences = [];
-  for (const id of styleImageIds) {
+  const inputReferences: string[] = [];
+  for (const id of referenceIds) {
     let dir: string | null = null;
     try {
       dir = resolveUploadPath(path.join("attachments", id));
@@ -37,29 +55,33 @@ export async function POST(request: NextRequest) {
     const entry = entries.find((item) => item.isFile());
     if (!entry) continue;
     const buffer = await readFile(path.join(dir, entry.name));
-    styleReferences.push({
-      image: `data:${mimeFromPath(entry.name)};base64,${buffer.toString("base64")}`,
-    });
+    if (buffer.byteLength > MAX_REFERENCE_BYTES) {
+      return NextResponse.json({
+        error: `${entry.name} 참조 이미지가 허용 크기를 초과합니다.`,
+      }, { status: 400 });
+    }
+    inputReferences.push(`data:${mimeFromPath(entry.name)};base64,${buffer.toString("base64")}`);
   }
 
   const payload: Record<string, unknown> = { model, prompt };
-  if (styleReferences.length > 0) {
-    payload.style_references = styleReferences;
+  if (inputReferences.length > 0) {
+    payload.input_references = inputReferences;
   }
-
-  // 비율을 고르지 않으면 두 값 모두 생략되어 기존과 동일하게 모델 기본값으로 생성됩니다.
-  const width = typeof body.width === "number" && Number.isFinite(body.width) ? Math.round(body.width) : null;
-  const height = typeof body.height === "number" && Number.isFinite(body.height) ? Math.round(body.height) : null;
-  if (width !== null && height !== null && width > 0 && height > 0) {
-    payload.width = width;
-    payload.height = height;
+  // 해상도와 장수는 모델이 supported_parameters 로 공개한 값만 클라이언트가
+  // 보내옵니다. 고르지 않으면 생략되어 모델 기본값으로 생성됩니다.
+  if (typeof body.resolution === "string" && body.resolution) {
+    payload.resolution = body.resolution;
+  }
+  const count = typeof body.n === "number" && Number.isFinite(body.n) ? Math.round(body.n) : null;
+  if (count !== null && count > 1) {
+    payload.n = count;
   }
 
   try {
     const upstream = await generateImage(payload);
     const bodyText = await readJson(upstream);
     if (!upstream.ok) {
-      throw politeVeniceError(upstream, bodyText, "Venice.ai 이미지 생성에 실패했습니다.");
+      throw politeNanoGptError(upstream, bodyText, "NanoGPT 이미지 생성에 실패했습니다.");
     }
     const images = extractImages(bodyText);
     const urls: string[] = [];
@@ -75,7 +97,7 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ ok: true, urls, count: urls.length });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Venice.ai 이미지 생성에 실패했습니다.";
+    const message = error instanceof Error ? error.message : "NanoGPT 이미지 생성에 실패했습니다.";
     const status = error instanceof Error && "status" in error ? Number((error as { status?: number }).status ?? 502) : 502;
     return NextResponse.json({ error: message }, { status });
   }
