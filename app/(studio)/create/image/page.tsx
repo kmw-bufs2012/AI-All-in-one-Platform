@@ -2,6 +2,10 @@
 
 import { useState } from "react";
 import { Icon } from "@/components/Icon";
+import {
+  DynamicParamsPanel,
+  type ParamValues,
+} from "@/components/DynamicParams";
 import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
 import {
@@ -16,6 +20,7 @@ import {
 import { recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { resolveImageAttachmentPolicy } from "@/lib/attachment-policy";
 import { formatCost } from "@/lib/cost";
+import { filterSupportedParamValues } from "@/lib/models";
 
 /*
  * 해상도 목록은 고정값이 아니라 모델이 공개한 값을 씁니다.
@@ -34,6 +39,7 @@ export default function ImagePage() {
   const [prompt, setPrompt] = useStudioState<string>("image:prompt", "");
   const [refs, setRefs] = useStudioState<AttachedFile[]>("image:refs", []);
   const [resolution, setResolution] = useStudioState<string>("image:resolution", DEFAULT_RESOLUTION);
+  const [paramValues, setParamValues] = useStudioState<ParamValues>("image:params", {});
   const [results, setResults] = useStudioState<string[]>("image:results", []);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
@@ -47,6 +53,15 @@ export default function ImagePage() {
   const activeResolution = resolutions.includes(resolution) ? resolution : DEFAULT_RESOLUTION;
   const maxOutputImages = models.selected?.maxOutputImages ?? 1;
   const unitPrice = models.selected?.pricing?.perRequest ?? null;
+
+  function changeParam(key: string, value: string | number | undefined) {
+    setParamValues((previous) => {
+      const next = { ...previous };
+      if (value === undefined) delete next[key];
+      else next[key] = value;
+      return next;
+    });
+  }
 
   async function pickRefs(event: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
@@ -97,6 +112,7 @@ export default function ImagePage() {
           prompt: text,
           referenceIds: refs.map((item) => item.id),
           resolution: activeResolution === DEFAULT_RESOLUTION ? undefined : activeResolution,
+          params: filterSupportedParamValues(model.imageParams, paramValues),
         }),
       });
       const body = await response.json().catch(() => ({}));
@@ -136,6 +152,11 @@ export default function ImagePage() {
       <div className="studio-scroll">
         <div className="studio-inner">
           <ModelDetail hook={models} />
+          <DynamicParamsPanel
+            params={models.selected?.imageParams ?? []}
+            values={paramValues}
+            onChange={changeParam}
+          />
 
           {results.length === 0 ? (
             <div className="studio-hero">

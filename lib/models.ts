@@ -55,6 +55,34 @@ export interface ExtraParam {
   default?: string | number | null;
 }
 
+/** 다른 모델에서 저장된 값이 현재 모델의 요청에 섞이지 않도록 허용값까지 검증합니다. */
+export function filterSupportedParamValues(
+  params: ExtraParam[],
+  values: Record<string, string | number>,
+): Record<string, string | number> {
+  const result: Record<string, string | number> = {};
+  for (const param of params) {
+    const value = values[param.key];
+    if (value === undefined) continue;
+    if (param.values && param.values.length > 0) {
+      const matched = param.values.find((candidate) => candidate === String(value));
+      if (matched !== undefined) result[param.key] = matched;
+      continue;
+    }
+    if (param.kind === "range" && typeof value === "number") {
+      if (
+        (param.min === undefined || value >= param.min)
+        && (param.max === undefined || value <= param.max)
+      ) {
+        result[param.key] = value;
+      }
+    } else if (param.kind === "enum" && typeof value === "string") {
+      result[param.key] = value;
+    }
+  }
+  return result;
+}
+
 export interface ModelPricing {
   inputPer1M: number | null;
   outputPer1M: number | null;
@@ -157,9 +185,26 @@ function asStringArray(value: unknown): string[] {
   return out;
 }
 
+function optionValues(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry === "string" || typeof entry === "number") {
+      out.push(String(entry));
+      continue;
+    }
+    const record = asRecord(entry);
+    const option = record.value;
+    if (typeof option === "string" || typeof option === "number") out.push(String(option));
+  }
+  return out;
+}
+
 /**
  * supported_parameters 는 두 가지 형태로 내려옵니다.
  * - 객체 맵: { resolution: { type: "enum", values: [...], default: "..." } }
+ * - 현재 영상 카탈로그: { parameters: { duration: { options: [...] } }, defaults: {...} }
+ * - 현재 이미지 카탈로그: { resolutions: [...], aspect_ratio: [...], max_images: 4 }
  * - 문자열 배열(OpenRouter 호환): ["temperature", "tools", ...]
  * 둘 다 다룰 수 있도록 "파라미터 이름 집합"과 "이름→정의 맵"을 함께 만듭니다.
  */
@@ -175,9 +220,28 @@ function readSupportedParams(raw: Record<string, unknown>): SupportedParams {
   if (Array.isArray(source)) {
     for (const name of asStringArray(source)) names.add(name.toLowerCase());
   } else {
-    for (const [key, value] of Object.entries(asRecord(source))) {
-      names.add(key.toLowerCase());
-      defs[key.toLowerCase()] = asRecord(value);
+    const sourceRecord = asRecord(source);
+    const nestedParameters = asRecord(sourceRecord.parameters);
+    const defaults = asRecord(sourceRecord.defaults);
+    const entries = Object.keys(nestedParameters).length > 0
+      ? Object.entries(nestedParameters)
+      : Object.entries(sourceRecord).filter(([key]) => key !== "parameters" && key !== "defaults");
+
+    for (const [key, value] of entries) {
+      const normalizedKey = key.toLowerCase();
+      names.add(normalizedKey);
+      if (Array.isArray(value)) {
+        defs[normalizedKey] = { values: value };
+        continue;
+      }
+      if (value && typeof value === "object") {
+        const def = { ...asRecord(value) };
+        if (def.default === undefined && defaults[key] !== undefined) def.default = defaults[key];
+        defs[normalizedKey] = def;
+        continue;
+      }
+      // max_images처럼 숫자 하나로 상한을 공개하는 평면 카탈로그 필드.
+      if (typeof value === "number") defs[normalizedKey] = { max: value };
     }
   }
   return { names, defs };
@@ -187,7 +251,7 @@ function paramValues(params: SupportedParams, ...keys: string[]): string[] {
   for (const key of keys) {
     const def = params.defs[key.toLowerCase()];
     if (!def) continue;
-    const values = asStringArray(def.values ?? def.enum ?? def.options);
+    const values = optionValues(def.values ?? def.enum ?? def.options);
     if (values.length > 0) return values;
   }
   return [];
@@ -226,7 +290,7 @@ function extractExtraParams(params: SupportedParams, excludeKeys: Set<string>): 
   const result: ExtraParam[] = [];
   for (const [key, def] of Object.entries(params.defs)) {
     if (excludeKeys.has(key)) continue;
-    const values = asStringArray(def.values ?? def.enum ?? def.options);
+    const values = optionValues(def.values ?? def.enum ?? def.options);
     const min = asNumber(def.min ?? def.minimum);
     const max = asNumber(def.max ?? def.maximum);
     const step = asNumber(def.step);
@@ -239,7 +303,12 @@ function extractExtraParams(params: SupportedParams, excludeKeys: Set<string>): 
     }
     if (values.length > 0) {
       // 값이 전부 숫자면(예: duration "5"/"10") 마우스로 끄는 슬라이더로도 쓸 수 있게 범위를 함께 채워 둡니다.
-      const numericValues = values.map((v) => Number(v)).filter((v) => Number.isFinite(v));
+      const numericValues = values
+        .map((value) => {
+          const match = value.trim().match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:s|sec|secs|second|seconds|초)?$/i);
+          return match ? Number(match[1]) : Number.NaN;
+        })
+        .filter((value) => Number.isFinite(value));
       if (numericValues.length === values.length && numericValues.length > 0) {
         result.push({
           key,
@@ -438,7 +507,10 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
 
   const resolutions = paramValues(params, "resolution", "resolutions", "size", "sizes");
   const defaultResolution = paramDefault(params, "resolution", "size");
-  const maxOutputImages = paramMax(params, "n", "num_images", "numImages") ?? 1;
+  const maxOutputImages = paramMax(
+    params,
+    "n", "num_images", "numImages", "max_images", "max_output_images",
+  ) ?? 1;
   // 이미 전용 필드로 뽑은 파라미터(해상도·장수·참조 이미지 계열)는 빼고, 나머지
   // (비율·품질·스타일 등)를 모델별 설정 컨트롤로 그대로 넘깁니다.
   const imageExclude = new Set([

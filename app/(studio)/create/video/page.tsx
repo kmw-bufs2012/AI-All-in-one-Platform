@@ -1,11 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {
+  DynamicParamsPanel,
+  type ParamValues,
+} from "@/components/DynamicParams";
 import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
 import { AttachStrip, FileChip, ModelChip, ModelDetail, SendButton } from "@/components/studio-ui";
 import { MAX_VIDEO_BYTES, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { resolveVideoAttachmentPolicy } from "@/lib/attachment-policy";
+import { filterSupportedParamValues } from "@/lib/models";
 
 const POLL_INTERVAL_MS = 5000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -20,6 +25,7 @@ export default function VideoPage() {
   const [prompt, setPrompt] = useStudioState<string>("video:prompt", "");
   const [startImage, setStartImage] = useStudioState<AttachedFile | null>("video:startImage", null);
   const [sourceVideo, setSourceVideo] = useStudioState<AttachedFile | null>("video:sourceVideo", null);
+  const [paramValues, setParamValues] = useStudioState<ParamValues>("video:params", {});
   const [results, setResults] = useStudioState<VideoResult[]>("video:results", []);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
@@ -41,6 +47,15 @@ export default function VideoPage() {
   // 예상 비용을 보여 줍니다(공개하지 않는 모델은 표시하지 않습니다).
   const unitPrice = models.selected?.pricing?.perRequest ?? null;
   const currency = models.selected?.pricing?.currency ?? null;
+
+  function changeParam(key: string, value: string | number | undefined) {
+    setParamValues((previous) => {
+      const next = { ...previous };
+      if (value === undefined) delete next[key];
+      else next[key] = value;
+      return next;
+    });
+  }
 
   async function pickStartImage(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -107,6 +122,7 @@ export default function VideoPage() {
           prompt: text,
           startImageId: supportsStartImage ? startImage?.id : undefined,
           sourceVideoId: supportsSourceVideo ? sourceVideo?.id : undefined,
+          params: filterSupportedParamValues(model.videoParams, paramValues),
         }),
       });
       const queueBody = await queueResponse.json().catch(() => ({}));
@@ -211,6 +227,11 @@ export default function VideoPage() {
       <div className="studio-scroll">
         <div className="studio-inner">
           <ModelDetail hook={models} />
+          <DynamicParamsPanel
+            params={models.selected?.videoParams ?? []}
+            values={paramValues}
+            onChange={changeParam}
+          />
 
           {results.length === 0 ? (
             <div className="studio-hero">
