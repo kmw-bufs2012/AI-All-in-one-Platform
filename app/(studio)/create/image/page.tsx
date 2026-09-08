@@ -14,6 +14,7 @@ import {
   Lightbox,
   ModelChip,
   ModelDetail,
+  NewSessionButton,
   SelectChip,
   SendButton,
 } from "@/components/studio-ui";
@@ -61,6 +62,15 @@ export default function ImagePage() {
       else next[key] = value;
       return next;
     });
+  }
+
+  function startNewSession() {
+    setPrompt("");
+    setRefs([]);
+    setResults([]);
+    setError("");
+    setCostLine("");
+    setLightbox(null);
   }
 
   async function pickRefs(event: React.ChangeEvent<HTMLInputElement>) {
@@ -151,6 +161,9 @@ export default function ImagePage() {
     <div className="studio">
       <div className="studio-scroll">
         <div className="studio-inner">
+          <div className="studio-toolbar">
+            <NewSessionButton disabled={generating} onClick={startNewSession} />
+          </div>
           <ModelDetail hook={models} />
           <DynamicParamsPanel
             params={models.selected?.imageParams ?? []}

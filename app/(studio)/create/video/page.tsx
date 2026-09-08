@@ -7,8 +7,8 @@ import {
 } from "@/components/DynamicParams";
 import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
-import { AttachStrip, FileChip, ModelChip, ModelDetail, SendButton } from "@/components/studio-ui";
-import { MAX_VIDEO_BYTES, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
+import { AttachStrip, FileChip, ModelChip, ModelDetail, NewSessionButton, SendButton } from "@/components/studio-ui";
+import { MAX_VIDEO_BYTES, needsVideoCompression, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { resolveVideoAttachmentPolicy } from "@/lib/attachment-policy";
 import { filterSupportedParamValues } from "@/lib/models";
 
@@ -28,6 +28,7 @@ export default function VideoPage() {
   const [paramValues, setParamValues] = useStudioState<ParamValues>("video:params", {});
   const [results, setResults] = useStudioState<VideoResult[]>("video:results", []);
   const [busy, setBusy] = useState(false);
+  const [compressingVideo, setCompressingVideo] = useState(false);
   const [status, setStatus] = useState("");
   const [estimate, setEstimate] = useState<{ amount: number; currency: string | null; actual: boolean } | null>(null);
   const [error, setError] = useState("");
@@ -88,11 +89,24 @@ export default function VideoPage() {
       return;
     }
     try {
+      setCompressingVideo(needsVideoCompression(file));
       const uploaded = await uploadFiles([file]);
       setSourceVideo(uploaded[0] ?? null);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "영상 업로드에 실패했습니다.");
+    } finally {
+      setCompressingVideo(false);
     }
+  }
+
+  function startNewSession() {
+    setPrompt("");
+    setStartImage(null);
+    setSourceVideo(null);
+    setResults([]);
+    setStatus("");
+    setEstimate(null);
+    setError("");
   }
 
   async function generate() {
@@ -226,6 +240,9 @@ export default function VideoPage() {
     <div className="studio">
       <div className="studio-scroll">
         <div className="studio-inner">
+          <div className="studio-toolbar">
+            <NewSessionButton disabled={busy || compressingVideo} onClick={startNewSession} />
+          </div>
           <ModelDetail hook={models} />
           <DynamicParamsPanel
             params={models.selected?.videoParams ?? []}
@@ -292,13 +309,18 @@ export default function VideoPage() {
               if (sourceVideo?.id === id) setSourceVideo(null);
             }}
           />
+          {compressingVideo ? (
+            <div className="progress-note dock-alert">
+              <span className="spinner" /> 큰 동영상을 4.5MB 미만으로 압축하고 있습니다…
+            </div>
+          ) : null}
           {error ? <div className="error-box dock-alert">{error}</div> : null}
           <div className="dock-row">
             <ModelChip hook={models} />
             <FileChip
               label={`시작 이미지 ${startImage ? 1 : 0}/${maxStartImages}`}
               accept="image/*"
-              disabled={!supportsStartImage}
+              disabled={!supportsStartImage || compressingVideo}
               onPick={pickStartImage}
               title={supportsStartImage ? "시작 이미지 첨부" : "이 모델은 시작 이미지를 지원하지 않습니다"}
             />
@@ -306,6 +328,7 @@ export default function VideoPage() {
               <FileChip
                 label={`원본 영상 ${sourceVideo ? 1 : 0}/${policy.sourceVideo.max}`}
                 accept="video/*"
+                disabled={compressingVideo}
                 onPick={pickSourceVideo}
                 title="확장·편집할 원본 영상 첨부"
               />
@@ -316,7 +339,7 @@ export default function VideoPage() {
                 시작 이미지는 전송되지 않습니다
               </span>
             ) : null}
-            <SendButton disabled={busy || !prompt.trim()} onClick={generate} label="영상 생성" />
+            <SendButton disabled={busy || compressingVideo || !prompt.trim()} onClick={generate} label="영상 생성" />
           </div>
         </div>
       </div>
