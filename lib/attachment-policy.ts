@@ -1,32 +1,31 @@
 import type { NormalizedModel } from "./models";
 
 /*
- * 모델별 첨부 가능 개수 정책. Venice.ai 공식 OpenAPI 스키마(swagger.yaml,
- * 2026-08-14)와 공식 가이드(Vision / File Inputs)를 근거로 계산합니다.
+ * 모델별 첨부 정책. NanoGPT 공식 API 문서(docs.nano-gpt.com, 2026-09 확인)를
+ * 근거로 계산합니다.
  *
- * 채팅 모델(model_spec.capabilities):
- * - supportsVision — 이미지를 이해하는지 여부.
- * - supportsMultipleImages + maxImages — 한 요청에 여러 장을 보낼 수 있는지와
- *   최대 개수. 단일 이미지 모델은 "only the last image-containing message
- *   retains its images"이므로 상한 1장.
- * - supportsVideoInput + maxVideos — 동영상(video_url) 입력 지원 여부와 최대
- *   개수. 단, API 차원 상한 "At most 3 videos may be provided in one request"
- *   가 있으므로 min(maxVideos, 3)으로 적용.
- * - file 콘텐츠 파트는 서버 측에서 텍스트로 추출해 전달하는 방식이라 모델의
- *   비전 능력과 무관하게 모든 채팅 모델에 동일하게 적용됩니다. 공식 가이드에
- *   "You can include more than one file block"로 개수 제한이 없고 파일당 25MB
- *   제한만 있으므로, 5개는 이 앱의 안전 상한입니다.
+ * 채팅 모델(/v1/models?detailed=true 의 capabilities · architecture):
+ * - capabilities.vision — 이미지 첨부 가능 여부.
+ * - capabilities.video_input — 동영상 파일을 그대로 넘길 수 있는지.
+ * - capabilities.audio_input — 오디오 파일을 그대로 넘길 수 있는지.
+ * - capabilities.pdf_upload — PDF를 파일 파트로 올릴 수 있는지.
+ * NanoGPT 카탈로그는 "첨부 가능 여부"만 공개하고 채팅 요청당 최대 개수는
+ * 공개하지 않습니다. 그래서 종류별 허용 여부는 위 플래그로 정확히 가르고,
+ * 개수는 아래 앱 안전 상한을 적용합니다(문서에 근거가 없는 값을 모델별
+ * 제한인 것처럼 표시하지 않기 위함입니다).
  *
- * 이미지 생성 모델(model_spec):
- * - supportsStyleReferences + maxStyleReferences — POST /image/generate 의
- *   style_references 수용 여부와 최대 개수. 필드가 없으면 공식 multi-edit
- *   기본값(3)을 legacy 폴백으로 사용합니다. 참조 이미지는 1장당 8MB 미만.
+ * 이미지 생성 모델(/v1/image-models?detailed=true):
+ * - input_reference_constraints.max_items — 참조 이미지 최대 장수(예: 4).
+ * - .max_bytes(예: 31457280) / .formats(png·jpeg·webp) / .min_width·min_height(8).
+ * - supported_parameters.n.max — 한 번에 만들 이미지 장수.
+ * 이 값들은 모델마다 다르므로 전부 카탈로그에서 읽어 그대로 적용합니다.
  *
- * 영상 생성 모델(constraints.model_type):
- * - "image-to-video" 모델만 QueueVideoRequest.image_url(시작 이미지)를 받습니다.
+ * 영상 생성 모델(/v1/video-models?detailed=true):
+ * - imageUrl / imageDataUrl 파라미터가 있는 모델만 시작 이미지를 받습니다.
+ * - videoUrl 파라미터가 있는 모델은 기존 영상을 확장·편집할 수 있습니다.
  *
- * TTS 모델: CreateSpeechRequestSchema에 첨부 필드가 아예 없어서(입력은 텍스트
- * 4096자) 모든 첨부가 불가합니다.
+ * TTS 모델(/v1/audio-models?type=tts&detailed=true): 입력이 텍스트뿐이라
+ * 첨부가 없습니다. 대신 max_input_size(최대 글자 수)를 사용합니다.
  */
 
 export interface AttachmentSlot {
@@ -34,80 +33,111 @@ export interface AttachmentSlot {
   max: number;
 }
 
+/* 채팅 요청당 앱 안전 상한. NanoGPT가 모델별 개수를 공개하지 않아 사용합니다. */
+const CHAT_MAX_IMAGES = 10;
+const CHAT_MAX_VIDEOS = 3;
+const CHAT_MAX_AUDIOS = 3;
+const CHAT_MAX_DOCS = 5;
+
+/* 비전 전용 모델에 동영상을 보여 줄 때 뽑아 보내는 프레임 수. */
+const VIDEO_FRAME_COUNT = 6;
+
 export interface ChatAttachmentPolicy {
   image: AttachmentSlot;
   video: AttachmentSlot;
+  audio: AttachmentSlot;
   doc: AttachmentSlot;
-  /** true면 video_url 콘텐츠 파트를 그대로 전송. false면 비전 모델용 프레임 추출 방식. */
+  /** true면 동영상을 video_url 파트로 그대로 전송. false면 프레임을 뽑아 이미지로 전송. */
   videoNative: boolean;
-  /** 프레임 추출 방식일 때 첨부된 동영상 1개에서 뽑아 함께 보낼 프레임 수. */
+  /** 프레임 추출 방식일 때 동영상 1개에서 뽑는 프레임 수. */
   frameCount: number;
-  /** 이미지를 인식하지만 한 번에 1장만 처리하는 모델일 때 보여줄 안내 문구. */
-  singleImageNote: string | null;
+  /** capabilities.pdf_upload. false면 PDF 대신 텍스트 문서만 첨부할 수 있습니다. */
+  pdfAllowed: boolean;
+  /** 문서 첨부 input 의 accept 값. */
+  docAccept: string;
+  /** 첨부 제약을 사용자에게 한 줄로 알려 주는 문구. */
+  note: string | null;
 }
 
-const MAX_IMAGES = 10;
-const API_VIDEO_LIMIT = 3;
-const MULTI_IMAGE_FRAME_COUNT = 6;
-const SINGLE_IMAGE_FRAME_COUNT = 1;
-const MAX_DOCS = 5;
-
 export function resolveChatAttachmentPolicy(model: NormalizedModel | null): ChatAttachmentPolicy {
-  const vision = model?.lmm ?? false;
-  const multi = model?.supportsMultipleImages ?? false;
-  const nativeVideo = model?.chatVideoInput ?? false;
+  const vision = model?.vision ?? false;
+  const nativeVideo = model?.videoInput ?? false;
+  const audio = model?.audioInput ?? false;
+  const pdf = model?.pdfUpload ?? false;
 
-  const imageMax = vision ? Math.min(Math.max(model?.maxImages ?? MAX_IMAGES, 1), MAX_IMAGES) : 0;
-  const videoMax = nativeVideo
-    ? Math.min(Math.max(model?.maxVideos ?? API_VIDEO_LIMIT, 1), API_VIDEO_LIMIT)
-    : vision ? 1 : 0;
+  // 동영상은 직접 지원하면 그대로, 비전만 되면 프레임을 뽑아 이미지로 보냅니다.
+  const videoAllowed = nativeVideo || vision;
+
+  const notes: string[] = [];
+  if (model && !vision) notes.push("이미지를 인식하지 못하는 모델입니다");
+  if (model && !nativeVideo && vision) notes.push("동영상은 프레임을 뽑아 이미지로 전달합니다");
+  if (model && !pdf) notes.push("PDF를 지원하지 않아 텍스트 문서(txt·md)만 첨부할 수 있습니다");
 
   return {
-    image: { allowed: vision, max: imageMax },
-    video: { allowed: vision || nativeVideo, max: videoMax },
-    doc: { allowed: true, max: MAX_DOCS },
+    image: { allowed: vision, max: vision ? CHAT_MAX_IMAGES : 0 },
+    video: { allowed: videoAllowed, max: videoAllowed ? (nativeVideo ? CHAT_MAX_VIDEOS : 1) : 0 },
+    audio: { allowed: audio, max: audio ? CHAT_MAX_AUDIOS : 0 },
+    doc: { allowed: true, max: CHAT_MAX_DOCS },
     videoNative: nativeVideo,
-    frameCount: multi ? MULTI_IMAGE_FRAME_COUNT : SINGLE_IMAGE_FRAME_COUNT,
-    singleImageNote: vision && !multi
-      ? "이 모델은 이미지를 한 번에 1장만 인식합니다. 새로 첨부하면 이전 이미지는 전달되지 않습니다."
-      : null,
+    frameCount: VIDEO_FRAME_COUNT,
+    pdfAllowed: pdf,
+    docAccept: pdf ? ".pdf,.txt,.md,text/plain,text/markdown,application/pdf" : ".txt,.md,text/plain,text/markdown",
+    note: notes.length > 0 ? `${notes.join(" · ")}.` : null,
   };
 }
 
 export interface ImageAttachmentPolicy {
   reference: AttachmentSlot;
+  /** 참조 이미지 1장의 최대 바이트 수(input_reference_constraints.max_bytes). */
+  maxBytes: number | null;
+  /** 참조 이미지 허용 형식. 파일 선택기의 accept 값으로도 씁니다. */
+  formats: string[];
+  accept: string;
 }
 
-/*
- * style_references는 공식 스키마에서 "Only supported by models with
- * `supportsStyleReferences: true`"이며, 개별 모델 상한은 maxStyleReferences로
- * 공개됩니다. 필드가 없는 모델은 공식 문서상 미지원이지만, 구형 API 응답에서는
- * 필드 자체가 빠질 수 있어 legacy 폴백(기존 동작: 허용, 3장)을 둡니다.
- */
+const DEFAULT_REFERENCE_FORMATS = ["png", "jpeg", "webp"];
+
 export function resolveImageAttachmentPolicy(model: NormalizedModel | null): ImageAttachmentPolicy {
-  const supported = model ? (model.supportsStyleReferences ?? true) : false;
-  const max = model ? Math.min(Math.max(model.maxStyleReferences ?? 3, 1), 10) : 0;
-  return { reference: { allowed: supported, max } };
+  const max = model?.maxInputReferences ?? 0;
+  const formats = model?.referenceFormats?.length ? model.referenceFormats : DEFAULT_REFERENCE_FORMATS;
+  return {
+    reference: { allowed: max > 0, max },
+    maxBytes: model?.referenceMaxBytes ?? null,
+    formats,
+    accept: formats.map((format) => `image/${format === "jpg" ? "jpeg" : format}`).join(","),
+  };
 }
 
 export interface VideoAttachmentPolicy {
   startImage: AttachmentSlot;
+  sourceVideo: AttachmentSlot;
 }
 
 export function resolveVideoAttachmentPolicy(model: NormalizedModel | null): VideoAttachmentPolicy {
-  return { startImage: { allowed: model?.supportsVideoInput ?? false, max: 1 } };
+  return {
+    startImage: {
+      allowed: model?.acceptsStartImage ?? false,
+      max: model?.maxStartImages ?? 0,
+    },
+    sourceVideo: { allowed: model?.acceptsSourceVideo ?? false, max: model?.acceptsSourceVideo ? 1 : 0 },
+  };
 }
 
 export interface AudioAttachmentPolicy {
   image: AttachmentSlot;
   video: AttachmentSlot;
   doc: AttachmentSlot;
+  /** max_input_size. 카탈로그에 없으면 널리 쓰이는 4096자를 기본으로 씁니다. */
+  maxInputLength: number;
 }
 
-export function resolveAudioAttachmentPolicy(): AudioAttachmentPolicy {
+const DEFAULT_TTS_INPUT_LENGTH = 4096;
+
+export function resolveAudioAttachmentPolicy(model: NormalizedModel | null): AudioAttachmentPolicy {
   return {
     image: { allowed: false, max: 0 },
     video: { allowed: false, max: 0 },
     doc: { allowed: false, max: 0 },
+    maxInputLength: model?.maxInputLength ?? DEFAULT_TTS_INPUT_LENGTH,
   };
 }

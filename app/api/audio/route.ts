@@ -1,12 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateSpeech, politeVeniceError, readJson } from "@/lib/venice";
+import { generateSpeech, politeNanoGptError, readJson } from "@/lib/nanogpt";
 import { saveGeneratedFile } from "@/lib/storage";
 
-const ALLOWED_FORMATS = new Set(["mp3", "opus", "aac", "flac", "wav", "pcm"]);
-const MAX_INPUT_LENGTH = 4096;
+/*
+ * NanoGPT 동기 TTS(POST /api/v1/speech).
+ * 본문: model, input, voice, format(mp3·wav·ogg·opus·aac·flac·pcm16), speed, language.
+ * 최대 입력 길이는 모델마다 다르고 /v1/audio-models 의 max_input_size 로
+ * 공개되므로, 화면에서 모델 값으로 제한하고 서버에서는 넉넉한 방어선만 둡니다.
+ */
+const ALLOWED_FORMATS = new Set(["mp3", "wav", "ogg", "opus", "aac", "flac", "pcm16"]);
+const HARD_INPUT_LIMIT = 100000;
 
 export async function POST(request: NextRequest) {
-  let body: { model?: unknown; voice?: unknown; input?: unknown; response_format?: unknown };
+  let body: {
+    model?: unknown;
+    voice?: unknown;
+    input?: unknown;
+    format?: unknown;
+    speed?: unknown;
+    language?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
@@ -18,23 +31,29 @@ export async function POST(request: NextRequest) {
   if (!model || !input) {
     return NextResponse.json({ error: "모델과 음성 생성할 텍스트가 필요합니다." }, { status: 400 });
   }
-  if (input.length > MAX_INPUT_LENGTH) {
-    return NextResponse.json({ error: `텍스트는 ${MAX_INPUT_LENGTH}자 이내로 입력해 주세요.` }, { status: 400 });
+  if (input.length > HARD_INPUT_LIMIT) {
+    return NextResponse.json({ error: `텍스트는 ${HARD_INPUT_LIMIT}자 이내로 입력해 주세요.` }, { status: 400 });
   }
 
   const payload: Record<string, unknown> = { model, input };
   if (typeof body.voice === "string" && body.voice) {
     payload.voice = body.voice;
   }
-  if (typeof body.response_format === "string" && ALLOWED_FORMATS.has(body.response_format)) {
-    payload.response_format = body.response_format;
+  if (typeof body.format === "string" && ALLOWED_FORMATS.has(body.format)) {
+    payload.format = body.format;
+  }
+  if (typeof body.speed === "number" && Number.isFinite(body.speed)) {
+    payload.speed = body.speed;
+  }
+  if (typeof body.language === "string" && body.language) {
+    payload.language = body.language;
   }
 
   try {
     const upstream = await generateSpeech(payload);
     if (!upstream.ok) {
       const bodyText = await readJson(upstream);
-      throw politeVeniceError(upstream, bodyText, "Venice.ai 음성 생성에 실패했습니다.");
+      throw politeNanoGptError(upstream, bodyText, "NanoGPT 음성 생성에 실패했습니다.");
     }
     const buffer = Buffer.from(await upstream.arrayBuffer());
     const mime = upstream.headers.get("content-type") || "audio/mpeg";
@@ -46,7 +65,7 @@ export async function POST(request: NextRequest) {
       size: buffer.length,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Venice.ai 음성 생성에 실패했습니다.";
+    const message = error instanceof Error ? error.message : "NanoGPT 음성 생성에 실패했습니다.";
     const status = error instanceof Error && "status" in error ? Number((error as { status?: number }).status ?? 502) : 502;
     return NextResponse.json({ error: message }, { status });
   }

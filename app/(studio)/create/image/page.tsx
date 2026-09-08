@@ -17,20 +17,23 @@ import { recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { resolveImageAttachmentPolicy } from "@/lib/attachment-policy";
 import { formatCost } from "@/lib/cost";
 
-/** 비율을 고르지 않으면 폭·높이를 보내지 않아 모델 기본값으로 생성됩니다. */
-const RATIOS: Array<{ value: string; label: string; width?: number; height?: number }> = [
-  { value: "default", label: "모델 기본" },
-  { value: "square", label: "정사각형 1:1", width: 1024, height: 1024 },
-  { value: "wide", label: "가로 16:9", width: 1280, height: 720 },
-  { value: "tall", label: "세로 9:16", width: 720, height: 1280 },
-  { value: "photo", label: "사진 4:3", width: 1152, height: 864 },
-];
+/*
+ * 해상도 목록은 고정값이 아니라 모델이 공개한 값을 씁니다.
+ * NanoGPT 공식 문서: 지원 해상도는 /api/v1/image-models?detailed=true 의
+ * supported_parameters.resolution 에서 읽어야 하며, 모델마다 다릅니다.
+ * 고르지 않으면 resolution 을 보내지 않아 모델 기본값으로 생성됩니다.
+ */
+const DEFAULT_RESOLUTION = "default";
+
+function formatBytes(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))}MB`;
+}
 
 export default function ImagePage() {
   const models = useModels("image");
   const [prompt, setPrompt] = useStudioState<string>("image:prompt", "");
   const [refs, setRefs] = useStudioState<AttachedFile[]>("image:refs", []);
-  const [ratio, setRatio] = useStudioState<string>("image:ratio", "default");
+  const [resolution, setResolution] = useStudioState<string>("image:resolution", DEFAULT_RESOLUTION);
   const [results, setResults] = useStudioState<string[]>("image:results", []);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
@@ -40,6 +43,10 @@ export default function ImagePage() {
   const policy = resolveImageAttachmentPolicy(models.selected);
   const maxRefs = policy.reference.max;
   const supportsRefs = policy.reference.allowed;
+  const resolutions = models.selected?.resolutions ?? [];
+  const activeResolution = resolutions.includes(resolution) ? resolution : DEFAULT_RESOLUTION;
+  const maxOutputImages = models.selected?.maxOutputImages ?? 1;
+  const unitPrice = models.selected?.pricing?.perRequest ?? null;
 
   async function pickRefs(event: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
@@ -54,11 +61,13 @@ export default function ImagePage() {
       setError(`참조 이미지는 최대 ${maxRefs}개까지 첨부할 수 있습니다.`);
       return;
     }
-    // 공식 스키마: style_references 이미지 1장은 8MB 미만이어야 합니다.
-    for (const file of files) {
-      if (file.size >= 8 * 1024 * 1024) {
-        setError("참조 이미지는 8MB 미만만 첨부할 수 있습니다.");
-        return;
+    // 참조 이미지 1장의 크기 상한은 모델의 input_reference_constraints.max_bytes 입니다.
+    if (policy.maxBytes !== null) {
+      for (const file of files) {
+        if (file.size > policy.maxBytes) {
+          setError(`참조 이미지는 ${formatBytes(policy.maxBytes)} 이하만 첨부할 수 있습니다.`);
+          return;
+        }
       }
     }
     try {
@@ -79,7 +88,6 @@ export default function ImagePage() {
     }
     setError("");
     setGenerating(true);
-    const size = RATIOS.find((item) => item.value === ratio);
     try {
       const response = await fetch("/api/image", {
         method: "POST",
@@ -87,16 +95,20 @@ export default function ImagePage() {
         body: JSON.stringify({
           model: model.id,
           prompt: text,
-          styleImageIds: refs.map((item) => item.id),
-          width: size?.width,
-          height: size?.height,
+          referenceIds: refs.map((item) => item.id),
+          resolution: activeResolution === DEFAULT_RESOLUTION ? undefined : activeResolution,
         }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || "이미지 생성에 실패했습니다.");
       const urls: string[] = Array.isArray(body.urls) ? body.urls : [];
       setResults((prev) => [...urls, ...prev]);
-      setCostLine(formatCost(null, null));
+      // NanoGPT 이미지 모델은 카탈로그에 장당 단가를 공개하는 경우가 있어 그 값으로 계산합니다.
+      setCostLine(
+        unitPrice !== null
+          ? formatCost(unitPrice * Math.max(urls.length, 1), models.selected?.pricing?.currency ?? null)
+          : formatCost(null, null),
+      );
       recordJob({
         mode: "image",
         model: model.id,
@@ -104,8 +116,8 @@ export default function ImagePage() {
         attachments: refs,
         usage: null,
         unitPrice: model.pricing,
-        cost: null,
-        currency: null,
+        cost: unitPrice !== null ? unitPrice * Math.max(urls.length, 1) : null,
+        currency: model.pricing?.currency ?? null,
         status: "completed",
         result: { kind: "images", urls },
       });
@@ -184,22 +196,36 @@ export default function ImagePage() {
           {error ? <div className="error-box dock-alert">{error}</div> : null}
           <div className="dock-row">
             <ModelChip hook={models} />
-            <SelectChip
-              icon="ratio"
-              title="이미지 비율"
-              value={ratio}
-              onChange={setRatio}
-              options={RATIOS.map((item) => ({ value: item.value, label: item.label }))}
-            />
+            {resolutions.length > 0 ? (
+              <SelectChip
+                icon="ratio"
+                title="이미지 해상도"
+                value={activeResolution}
+                onChange={setResolution}
+                options={[
+                  { value: DEFAULT_RESOLUTION, label: "모델 기본" },
+                  ...resolutions.map((item) => ({ value: item, label: item })),
+                ]}
+              />
+            ) : null}
             <FileChip
               label={`참조 ${refs.length}/${maxRefs}`}
-              accept="image/*"
-              multiple
+              accept={policy.accept}
+              multiple={maxRefs > 1}
               disabled={!supportsRefs}
               onPick={pickRefs}
-              title={supportsRefs ? "참조 이미지 첨부" : "이 모델은 참조 이미지를 지원하지 않습니다"}
+              title={
+                supportsRefs
+                  ? `참조 이미지 첨부 (최대 ${maxRefs}장 · ${policy.formats.join("·")})`
+                  : "이 모델은 참조 이미지를 지원하지 않습니다"
+              }
             />
             <span className="dock-spacer" />
+            {maxOutputImages > 1 ? (
+              <span className="muted" style={{ fontSize: 11.5 }}>
+                한 번에 최대 {maxOutputImages}장 생성 가능
+              </span>
+            ) : null}
             {models.selected && !supportsRefs && refs.length > 0 ? (
               <span className="muted" style={{ fontSize: 11.5 }}>
                 참조 이미지는 전송되지 않습니다

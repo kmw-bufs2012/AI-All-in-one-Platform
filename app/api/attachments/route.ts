@@ -11,6 +11,7 @@ import {
   MAX_IMAGE_BYTES,
   MAX_VIDEO_FILES,
   MAX_VIDEO_BYTES,
+  MAX_AUDIO_FILES,
   MAX_DOCS,
   MAX_DOC_BYTES,
 } from "@/lib/attachments";
@@ -28,16 +29,18 @@ export async function POST(request: NextRequest) {
 
   let imageCount = 0;
   let videoCount = 0;
+  let audioCount = 0;
   let docCount = 0;
 
   for (const file of files) {
     const kind = kindFromFile(file.name, file.type);
     if (kind === "image") imageCount += 1;
     else if (kind === "video") videoCount += 1;
+    else if (kind === "audio") audioCount += 1;
     else if (kind === "doc") docCount += 1;
     else {
       return NextResponse.json({
-        error: `${file.name} 파일은 지원되지 않는 형식입니다. 이미지, 영상, 문서(txt/md/pdf)만 업로드할 수 있습니다.`,
+        error: `${file.name} 파일은 지원되지 않는 형식입니다. 이미지, 영상, 오디오, 문서(txt/md/pdf)만 업로드할 수 있습니다.`,
       }, { status: 400 });
     }
   }
@@ -46,6 +49,9 @@ export async function POST(request: NextRequest) {
   }
   if (videoCount > MAX_VIDEO_FILES) {
     return NextResponse.json({ error: `동영상은 최대 ${MAX_VIDEO_FILES}개까지 첨부할 수 있습니다.` }, { status: 400 });
+  }
+  if (audioCount > MAX_AUDIO_FILES) {
+    return NextResponse.json({ error: `오디오는 최대 ${MAX_AUDIO_FILES}개까지 첨부할 수 있습니다.` }, { status: 400 });
   }
   if (docCount > MAX_DOCS) {
     return NextResponse.json({ error: `문서는 최대 ${MAX_DOCS}개까지 첨부할 수 있습니다.` }, { status: 400 });
@@ -66,9 +72,14 @@ export async function POST(request: NextRequest) {
   for (const file of files) {
     const kind = kindFromFile(file.name, file.type);
     if (!kind) continue;
-    const sizeLimit = kind === "image" ? MAX_IMAGE_BYTES : kind === "video" ? MAX_VIDEO_BYTES : MAX_DOC_BYTES;
+    // 오디오는 동영상과 같은 상한을 적용합니다(길이가 길면 파일이 커지기 때문).
+    const sizeLimit = kind === "image"
+      ? MAX_IMAGE_BYTES
+      : kind === "video" || kind === "audio"
+        ? MAX_VIDEO_BYTES
+        : MAX_DOC_BYTES;
     if (file.size > sizeLimit) {
-      const limitText = kind === "video" ? "50MB" : kind === "doc" ? "25MB" : "10MB";
+      const limitText = kind === "video" || kind === "audio" ? "50MB" : kind === "doc" ? "25MB" : "10MB";
       return NextResponse.json({
         error: `${file.name} 파일의 크기가 ${limitText}를 초과합니다.`,
       }, { status: 400 });

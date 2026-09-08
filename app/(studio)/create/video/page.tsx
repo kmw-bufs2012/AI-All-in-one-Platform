@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
 import { AttachStrip, FileChip, ModelChip, ModelDetail, SendButton } from "@/components/studio-ui";
-import { recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
+import { MAX_VIDEO_BYTES, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { resolveVideoAttachmentPolicy } from "@/lib/attachment-policy";
 
 const POLL_INTERVAL_MS = 5000;
@@ -19,6 +19,7 @@ export default function VideoPage() {
   const models = useModels("video");
   const [prompt, setPrompt] = useStudioState<string>("video:prompt", "");
   const [startImage, setStartImage] = useStudioState<AttachedFile | null>("video:startImage", null);
+  const [sourceVideo, setSourceVideo] = useStudioState<AttachedFile | null>("video:sourceVideo", null);
   const [results, setResults] = useStudioState<VideoResult[]>("video:results", []);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
@@ -34,6 +35,12 @@ export default function VideoPage() {
 
   const policy = resolveVideoAttachmentPolicy(models.selected);
   const maxStartImages = policy.startImage.max;
+  const supportsStartImage = policy.startImage.allowed;
+  const supportsSourceVideo = policy.sourceVideo.allowed;
+  // NanoGPT에는 영상 견적 전용 엔드포인트가 없어, 카탈로그가 공개한 단가로
+  // 예상 비용을 보여 줍니다(공개하지 않는 모델은 표시하지 않습니다).
+  const unitPrice = models.selected?.pricing?.perRequest ?? null;
+  const currency = models.selected?.pricing?.currency ?? null;
 
   async function pickStartImage(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -52,6 +59,27 @@ export default function VideoPage() {
     }
   }
 
+  async function pickSourceVideo(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setError("");
+    if (!supportsSourceVideo) {
+      setError("이 모델은 원본 영상을 지원하지 않습니다.");
+      return;
+    }
+    if (file.size > MAX_VIDEO_BYTES) {
+      setError("원본 영상은 50MB 이하만 첨부할 수 있습니다.");
+      return;
+    }
+    try {
+      const uploaded = await uploadFiles([file]);
+      setSourceVideo(uploaded[0] ?? null);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "영상 업로드에 실패했습니다.");
+    }
+  }
+
   async function generate() {
     const text = prompt.trim();
     if (busy || !text) return;
@@ -62,35 +90,26 @@ export default function VideoPage() {
     }
     setError("");
     setBusy(true);
-    setStatus("비용 견적을 확인하고 있습니다…");
 
-    let quote: { amount: number; currency: string | null } | null = null;
-    try {
-      const quoteResponse = await fetch("/api/video/quote", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: model.id, prompt: text, startImageId: startImage?.id }),
-      });
-      const quoteBody = await quoteResponse.json().catch(() => ({}));
-      if (quoteResponse.ok && quoteBody.cost) {
-        quote = quoteBody.cost;
-        setEstimate(quote);
-      }
-    } catch {
-      // 견적을 못 받아도 생성은 계속 진행합니다.
-    }
+    const quote = unitPrice !== null ? { amount: unitPrice, currency } : null;
+    setEstimate(quote);
 
     try {
       setStatus("영상 생성을 요청하고 있습니다…");
       const queueResponse = await fetch("/api/video", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: model.id, prompt: text, startImageId: startImage?.id }),
+        body: JSON.stringify({
+          model: model.id,
+          prompt: text,
+          startImageId: supportsStartImage ? startImage?.id : undefined,
+          sourceVideoId: supportsSourceVideo ? sourceVideo?.id : undefined,
+        }),
       });
       const queueBody = await queueResponse.json().catch(() => ({}));
       if (!queueResponse.ok) throw new Error(queueBody.error || "영상 생성 요청에 실패했습니다.");
 
-      const queueId: string = queueBody.queueId;
+      const runId: string = queueBody.runId;
       pollRef.current = { timer: null, startedAt: Date.now() };
       setStatus("영상이 만들어지고 있습니다. 몇 분 정도 걸릴 수 있습니다…");
 
@@ -98,7 +117,7 @@ export default function VideoPage() {
         const poll = async () => {
           try {
             const retrieveResponse = await fetch(
-              `/api/video/retrieve?queue_id=${encodeURIComponent(queueId)}&model=${encodeURIComponent(model.id)}`,
+              `/api/video/retrieve?run_id=${encodeURIComponent(runId)}`,
               { cache: "no-store" },
             );
             const retrieveBody = await retrieveResponse.json().catch(() => ({}));
@@ -112,9 +131,9 @@ export default function VideoPage() {
                 mode: "video",
                 model: model.id,
                 prompt: text,
-                attachments: startImage ? [startImage] : [],
+                attachments: [startImage, sourceVideo].filter((item): item is AttachedFile => Boolean(item)),
                 usage: null,
-                unitPrice: quote ? { videoQuote: quote } : null,
+                unitPrice: model.pricing,
                 cost: quote?.amount ?? null,
                 currency: quote?.currency ?? null,
                 status: "completed",
@@ -128,9 +147,9 @@ export default function VideoPage() {
                 mode: "video",
                 model: model.id,
                 prompt: text,
-                attachments: startImage ? [startImage] : [],
+                attachments: [startImage, sourceVideo].filter((item): item is AttachedFile => Boolean(item)),
                 usage: null,
-                unitPrice: quote ? { videoQuote: quote } : null,
+                unitPrice: model.pricing,
                 cost: quote?.amount ?? null,
                 currency: quote?.currency ?? null,
                 status: "failed",
@@ -159,9 +178,9 @@ export default function VideoPage() {
         mode: "video",
         model: model.id,
         prompt: text,
-        attachments: startImage ? [startImage] : [],
+        attachments: [startImage, sourceVideo].filter((item): item is AttachedFile => Boolean(item)),
         usage: null,
-        unitPrice: quote ? { videoQuote: quote } : null,
+        unitPrice: model.pricing,
         cost: quote?.amount ?? null,
         currency: quote?.currency ?? null,
         status: "failed",
@@ -171,8 +190,6 @@ export default function VideoPage() {
       setBusy(false);
     }
   }
-
-  const supportsStartImage = policy.startImage.allowed;
 
   return (
     <div className="studio">
@@ -232,7 +249,13 @@ export default function VideoPage() {
             placeholder="만들고 싶은 영상을 설명해 주세요."
             rows={1}
           />
-          <AttachStrip files={startImage ? [startImage] : []} onRemove={() => setStartImage(null)} />
+          <AttachStrip
+            files={[startImage, sourceVideo].filter((item): item is AttachedFile => Boolean(item))}
+            onRemove={(id) => {
+              if (startImage?.id === id) setStartImage(null);
+              if (sourceVideo?.id === id) setSourceVideo(null);
+            }}
+          />
           {error ? <div className="error-box dock-alert">{error}</div> : null}
           <div className="dock-row">
             <ModelChip hook={models} />
@@ -243,6 +266,14 @@ export default function VideoPage() {
               onPick={pickStartImage}
               title={supportsStartImage ? "시작 이미지 첨부" : "이 모델은 시작 이미지를 지원하지 않습니다"}
             />
+            {supportsSourceVideo ? (
+              <FileChip
+                label={`원본 영상 ${sourceVideo ? 1 : 0}/${policy.sourceVideo.max}`}
+                accept="video/*"
+                onPick={pickSourceVideo}
+                title="확장·편집할 원본 영상 첨부"
+              />
+            ) : null}
             <span className="dock-spacer" />
             {models.selected && !supportsStartImage && startImage ? (
               <span className="muted" style={{ fontSize: 11.5 }}>

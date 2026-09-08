@@ -113,6 +113,34 @@ export default function ChatPage() {
     }
   }
 
+  async function pickAudios(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (files.length === 0) return;
+    setError("");
+    if (!policy.audio.allowed) {
+      setError("선택한 모델은 오디오를 인식하지 못합니다.");
+      return;
+    }
+    const audios = attachments.filter((item) => item.kind === "audio");
+    if (audios.length + files.length > policy.audio.max) {
+      setError(`이 모델은 오디오를 최대 ${policy.audio.max}개까지 첨부할 수 있습니다.`);
+      return;
+    }
+    for (const file of files) {
+      if (file.size > MAX_VIDEO_BYTES) {
+        setError("오디오는 50MB 이하만 첨부할 수 있습니다.");
+        return;
+      }
+    }
+    try {
+      const uploaded = await uploadFiles(files);
+      setAttachments((prev) => [...prev, ...uploaded]);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "오디오 업로드에 실패했습니다.");
+    }
+  }
+
   async function pickDoc(event: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
@@ -125,6 +153,11 @@ export default function ChatPage() {
     const docs = attachments.filter((item) => item.kind === "doc");
     if (docs.length + files.length > policy.doc.max) {
       setError(`문서는 최대 ${policy.doc.max}개까지 첨부할 수 있습니다.`);
+      return;
+    }
+    // PDF는 capabilities.pdf_upload 를 공개한 모델에서만 그대로 전달됩니다.
+    if (!policy.pdfAllowed && files.some((file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf")) {
+      setError("이 모델은 PDF를 지원하지 않습니다. 텍스트 문서(txt·md)를 첨부해 주세요.");
       return;
     }
     try {
@@ -147,11 +180,11 @@ export default function ChatPage() {
     setSending(true);
 
     const snapshot = [...attachments];
-    const hasVision = model.lmm;
+    const hasVision = model.vision;
     const videoNative = policy.videoNative;
     let frames: string[] = [];
     let framesCount = 0;
-    // 동영상을 직접 지원하는 모델(chatVideoInput)은 video_url 콘텐츠 파트로
+    // 동영상을 직접 지원하는 모델(capabilities.video_input)은 video_url 파트로
     // 그대로 전송합니다. 비전 전용 모델은 프레임을 뽑아 이미지로 보냅니다.
     if (!videoNative && hasVision) {
       const videoAtt = snapshot.find((item) => item.kind === "video");
@@ -194,8 +227,12 @@ export default function ChatPage() {
             videos: videoNative
               ? snapshot.filter((item) => item.kind === "video").map((item) => item.id)
               : undefined,
+            audios: policy.audio.allowed
+              ? snapshot.filter((item) => item.kind === "audio").map((item) => item.id)
+              : undefined,
           },
           frames,
+          pdfAllowed: policy.pdfAllowed,
         }),
       });
       if (!response.ok || !response.body) {
@@ -299,6 +336,7 @@ export default function ChatPage() {
           const sent =
             item.kind === "doc" ||
             (item.kind === "image" && hasVision) ||
+            (item.kind === "audio" && policy.audio.allowed) ||
             (item.kind === "video" && (videoNative || hasVision));
           return sent ? item : { ...item, notSent: true };
         }),
@@ -332,6 +370,7 @@ export default function ChatPage() {
 
   const imageCount = attachments.filter((item) => item.kind === "image").length;
   const videoCount = attachments.filter((item) => item.kind === "video").length;
+  const audioCount = attachments.filter((item) => item.kind === "audio").length;
   const docCount = attachments.filter((item) => item.kind === "doc").length;
 
   return (
@@ -433,17 +472,25 @@ export default function ChatPage() {
               title={policy.video.allowed ? "동영상 첨부" : "이 모델은 동영상을 인식하지 못합니다"}
             />
             <FileChip
+              label={`오디오 ${audioCount}/${policy.audio.max}`}
+              accept="audio/*"
+              multiple={policy.audio.max > 1}
+              disabled={!policy.audio.allowed}
+              onPick={pickAudios}
+              title={policy.audio.allowed ? "오디오 첨부" : "이 모델은 오디오를 인식하지 못합니다"}
+            />
+            <FileChip
               label={`문서 ${docCount}/${policy.doc.max}`}
-              accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
+              accept={policy.docAccept}
               multiple
               disabled={!policy.doc.allowed}
               onPick={pickDoc}
-              title="문서 첨부"
+              title={policy.pdfAllowed ? "문서 첨부 (txt·md·pdf)" : "문서 첨부 (txt·md)"}
             />
             <span className="dock-spacer" />
-            {policy.singleImageNote ? (
+            {policy.note ? (
               <span className="muted" style={{ fontSize: 11.5 }}>
-                {policy.singleImageNote}
+                {policy.note}
               </span>
             ) : null}
             <SendButton disabled={sending || (!input.trim() && attachments.length === 0)} onClick={send} label="전송" />

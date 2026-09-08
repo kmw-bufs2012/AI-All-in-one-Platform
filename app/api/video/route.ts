@@ -1,11 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { queueVideo, politeVeniceError, readJson } from "@/lib/venice";
-import { extractId, extractStatus, readableError } from "@/lib/extract";
+import { queueVideo, politeNanoGptError, readJson } from "@/lib/nanogpt";
+import { extractRunId, extractStatus } from "@/lib/extract";
 import { resolveUploadPath, mimeFromPath } from "@/lib/attachments";
 
-async function resolveImageDataUrl(id: string): Promise<string | null> {
+/*
+ * NanoGPT 영상 생성(POST /api/generate-video)은 비동기입니다. 요청은 즉시
+ * runId 와 status: "pending" 을 돌려주고, 결과는 /api/video/status 로 폴링합니다.
+ *
+ * 입력 미디어는 모델마다 다릅니다.
+ * - image-to-video 모델: imageDataUrl(base64) 또는 imageUrl(공개 HTTPS URL).
+ * - 영상 확장·편집 모델: videoUrl.
+ * 어떤 모델이 무엇을 받는지는 /v1/video-models 의 supported_parameters 로
+ * 판정해 클라이언트에서 걸러 보냅니다(lib/attachment-policy.ts).
+ */
+async function resolveDataUrl(id: string): Promise<string | null> {
   let dir: string | null = null;
   try {
     dir = resolveUploadPath(path.join("attachments", id));
@@ -21,7 +31,7 @@ async function resolveImageDataUrl(id: string): Promise<string | null> {
 }
 
 export async function POST(request: NextRequest) {
-  let body: { model?: unknown; prompt?: unknown; startImageId?: unknown };
+  let body: { model?: unknown; prompt?: unknown; startImageId?: unknown; sourceVideoId?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -36,28 +46,32 @@ export async function POST(request: NextRequest) {
 
   const payload: Record<string, unknown> = { model, prompt };
   if (typeof body.startImageId === "string") {
-    const dataUrl = await resolveImageDataUrl(body.startImageId);
-    if (dataUrl) payload.image_url = dataUrl;
+    const dataUrl = await resolveDataUrl(body.startImageId);
+    if (dataUrl) payload.imageDataUrl = dataUrl;
+  }
+  if (typeof body.sourceVideoId === "string") {
+    const dataUrl = await resolveDataUrl(body.sourceVideoId);
+    if (dataUrl) payload.videoDataUrl = dataUrl;
   }
 
   try {
     const upstream = await queueVideo(payload);
     const bodyText = await readJson(upstream);
     if (!upstream.ok) {
-      throw politeVeniceError(upstream, bodyText, "Venice.ai 영상 생성 요청에 실패했습니다.");
+      throw politeNanoGptError(upstream, bodyText, "NanoGPT 영상 생성 요청에 실패했습니다.");
     }
-    const queueId = extractId(bodyText);
-    if (!queueId) {
+    const runId = extractRunId(bodyText);
+    if (!runId) {
       throw new Error("영상 생성 요청 응답에서 작업 번호를 확인할 수 없습니다.");
     }
     return NextResponse.json({
       ok: true,
-      queueId,
-      status: extractStatus(bodyText) ?? "QUEUED",
+      runId,
+      status: extractStatus(bodyText) ?? "pending",
       raw: bodyText,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Venice.ai 영상 생성 요청에 실패했습니다.";
+    const message = error instanceof Error ? error.message : "NanoGPT 영상 생성 요청에 실패했습니다.";
     const status = error instanceof Error && "status" in error ? Number((error as { status?: number }).status ?? 502) : 502;
     return NextResponse.json({ error: message }, { status });
   }

@@ -8,8 +8,11 @@ import { ModelChip, ModelDetail, SelectChip, SendButton } from "@/components/stu
 import { recordJob } from "@/lib/client-api";
 import { resolveAudioAttachmentPolicy } from "@/lib/attachment-policy";
 
-// 공식 스키마 기준 TTS 요청(CreateSpeechRequestSchema)의 입력 최대 길이입니다.
-const MAX_CHARS = 4096;
+/*
+ * 최대 입력 길이와 출력 형식은 모델마다 다릅니다. NanoGPT 공식 문서에 따르면
+ * /api/v1/audio-models?type=tts&detailed=true 가 모델별 voices · formats ·
+ * max_input_size 를 공개하므로, 화면 제한도 그 값을 따릅니다.
+ */
 
 interface AudioResult {
   url: string;
@@ -21,15 +24,18 @@ export default function AudioPage() {
   const models = useModels("tts");
   const [input, setInput] = useStudioState<string>("audio:input", "");
   const [voice, setVoice] = useStudioState<string>("audio:voice", "");
+  const [format, setFormat] = useStudioState<string>("audio:format", "");
   const [results, setResults] = useStudioState<AudioResult[]>("audio:results", []);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
 
   const voices = models.selected?.voices ?? [];
   const activeVoice = voice || models.selected?.defaultVoice || voices[0]?.id || "";
-  // TTS 모델은 공식 스키마상 첨부(이미지/영상/텍스트 파일)를 지원하지 않습니다.
-  // 텍스트만 입력받으므로 모든 첨부 개수는 0으로 고정됩니다.
-  const policy = resolveAudioAttachmentPolicy();
+  // TTS 모델은 입력이 텍스트뿐이라 첨부를 지원하지 않습니다(첨부 개수 0).
+  const policy = resolveAudioAttachmentPolicy(models.selected);
+  const maxChars = policy.maxInputLength;
+  const formats = models.selected?.supportedFormats ?? [];
+  const activeFormat = formats.includes(format) ? format : models.selected?.defaultFormat || formats[0] || "mp3";
 
   async function generate() {
     const text = input.trim();
@@ -49,7 +55,7 @@ export default function AudioPage() {
           model: model.id,
           voice: activeVoice || undefined,
           input: text,
-          response_format: model.defaultFormat || "mp3",
+          format: activeFormat,
         }),
       });
       const body = await response.json().catch(() => ({}));
@@ -137,7 +143,7 @@ export default function AudioPage() {
           <textarea
             className="dock-textarea"
             value={input}
-            onChange={(event) => setInput(event.target.value.slice(0, MAX_CHARS))}
+            onChange={(event) => setInput(event.target.value.slice(0, maxChars))}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
@@ -145,7 +151,7 @@ export default function AudioPage() {
               }
             }}
             placeholder="음성으로 들려줄 문장을 입력해 주세요."
-            maxLength={MAX_CHARS}
+            maxLength={maxChars}
             rows={1}
           />
           {error ? <div className="error-box dock-alert">{error}</div> : null}
@@ -160,12 +166,21 @@ export default function AudioPage() {
                 options={voices.map((item) => ({ value: item.id, label: item.name }))}
               />
             ) : null}
+            {formats.length > 1 ? (
+              <SelectChip
+                icon="audio"
+                title="출력 형식"
+                value={activeFormat}
+                onChange={setFormat}
+                options={formats.map((item) => ({ value: item, label: item }))}
+              />
+            ) : null}
             <span className="dock-spacer" />
             <span className="muted" style={{ fontSize: 11.5 }}>
               첨부 불가 · 이미지 {policy.image.max}/{policy.image.max} · 동영상 {policy.video.max}/{policy.video.max} · 파일 {policy.doc.max}/{policy.doc.max}
             </span>
             <span className="muted" style={{ fontSize: 11.5 }}>
-              {input.length.toLocaleString()} / {MAX_CHARS.toLocaleString()}자
+              {input.length.toLocaleString()} / {maxChars.toLocaleString()}자
             </span>
             <SendButton disabled={generating || !input.trim()} onClick={generate} label="음성 생성" />
           </div>
