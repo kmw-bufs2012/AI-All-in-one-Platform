@@ -50,22 +50,29 @@ export interface NormalizedModel {
   pricing: ModelPricing | null;
 
   /* ---------------------------------------------------------- 채팅 모델 */
+  /*
+   * 첨부 관련 능력은 3-상태입니다: true(지원) / false(명시적 미지원) /
+   * null(카탈로그가 알려 주지 않음). NanoGPT 카탈로그는 모델마다 메타데이터
+   * 수록 정도가 달라서, 필드가 없는 것을 "미지원"으로 단정하면 실제로는
+   * 첨부되는 모델까지 막히게 됩니다. 그래서 null은 정책 단계에서 허용 쪽으로
+   * 해석합니다(lib/attachment-policy.ts).
+   */
   /** capabilities.vision — 이미지를 이해하는 모델인지. */
-  vision: boolean;
+  vision: boolean | null;
   /** capabilities.video_input — 동영상 파일을 직접 입력받는지. */
-  videoInput: boolean;
+  videoInput: boolean | null;
   /** capabilities.audio_input — 오디오 파일을 직접 입력받는지. */
-  audioInput: boolean;
+  audioInput: boolean | null;
   /** capabilities.pdf_upload — PDF 문서를 직접 업로드할 수 있는지. */
-  pdfUpload: boolean;
+  pdfUpload: boolean | null;
   /** architecture.input_modalities — ["text", "image", "video", "audio", "file"] 등. */
   inputModalities: string[];
   contextWindow: number | null;
   maxOutputTokens: number | null;
 
   /* ------------------------------------------------------ 이미지 생성 모델 */
-  /** input_reference_constraints.max_items — 참조 이미지 최대 장수. */
-  maxInputReferences: number;
+  /** input_reference_constraints.max_items — 참조 이미지 최대 장수. null이면 미공개. */
+  maxInputReferences: number | null;
   /** input_reference_constraints.formats — 참조 이미지 허용 형식(png/jpeg/webp). */
   referenceFormats: string[];
   /** input_reference_constraints.max_bytes — 참조 이미지 1장 최대 크기. */
@@ -77,11 +84,10 @@ export interface NormalizedModel {
   maxOutputImages: number;
 
   /* ------------------------------------------------------- 영상 생성 모델 */
-  /** imageUrl / imageDataUrl 을 받는 image-to-video 계열인지. */
-  acceptsStartImage: boolean;
-  /** videoUrl 을 받는 영상 확장·편집 계열인지. */
-  acceptsSourceVideo: boolean;
-  maxStartImages: number;
+  /** imageUrl / imageDataUrl 을 받는 image-to-video 계열인지. null이면 미공개. */
+  acceptsStartImage: boolean | null;
+  /** videoUrl 을 받는 영상 확장·편집 계열인지. null이면 미공개. */
+  acceptsSourceVideo: boolean | null;
 
   /* ------------------------------------------------------------ TTS 모델 */
   voices: VoiceInfo[];
@@ -247,6 +253,62 @@ function extractVoices(raw: Record<string, unknown>, params: SupportedParams): {
   return { voices, defaultVoice: fallback || voices[0]?.id || null };
 }
 
+/*
+ * 능력 플래그 탐색.
+ *
+ * NanoGPT 카탈로그는 모델·제공자마다 능력 표기 위치와 이름이 제각각입니다.
+ * SillyTavern 등 실제 연동 코드가 읽는 `capabilities.vision` 형태가 기본이지만,
+ * 같은 정보가 최상위 필드나 `features`, `model_spec.capabilities` 아래에 오기도
+ * 하고, 이름도 snake_case·camelCase·supportsXxx 형태가 섞입니다.
+ *
+ * 그래서 후보 이름들을 여러 위치에서 찾아보고, 어디에서도 언급이 없으면
+ * false 가 아니라 null(모름)을 돌려줍니다. false 로 단정하면 카탈로그가
+ * 메타데이터를 싣지 않은 모델의 첨부까지 막히기 때문입니다.
+ */
+function capabilityContainers(raw: Record<string, unknown>): Record<string, unknown>[] {
+  const spec = asRecord(raw.model_spec ?? raw.modelSpec);
+  return [
+    asRecord(raw.capabilities),
+    asRecord(raw.features),
+    asRecord(spec.capabilities),
+    spec,
+    raw,
+  ];
+}
+
+function lookupFlag(raw: Record<string, unknown>, names: string[]): boolean | null {
+  for (const container of capabilityContainers(raw)) {
+    for (const name of names) {
+      const value = container[name];
+      if (value === true || value === "true") return true;
+      if (value === false || value === "false") return false;
+    }
+  }
+  return null;
+}
+
+/*
+ * architecture.modality 는 "text+image->text" 처럼 입력·출력 모달리티를 한
+ * 문자열로 표현합니다. input_modalities 배열이 없는 응답에서도 이 문자열로
+ * 이미지·영상·오디오 입력 여부를 알 수 있습니다.
+ */
+function modalityInputs(architecture: Record<string, unknown>): string[] {
+  const explicit = asStringArray(architecture.input_modalities ?? architecture.inputModalities);
+  if (explicit.length > 0) return explicit;
+  const modality = asString(architecture.modality);
+  if (!modality) return [];
+  const [inputs] = modality.split("->");
+  return inputs.split("+").map((part) => part.trim()).filter(Boolean);
+}
+
+/**
+ * 플래그가 없을 때 쓰는 보조 신호. NanoGPT는 모델 이름·설명에 능력을 적어 두는
+ * 경우가 많습니다(예: "DeepSeek V4 Flash Vision Exp Uncensored").
+ */
+function mentions(haystack: string, pattern: RegExp): boolean {
+  return pattern.test(haystack);
+}
+
 export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedModel {
   const raw = asRecord(rawInput);
   const params = readSupportedParams(raw);
@@ -255,20 +317,56 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const constraints = asRecord(raw.input_reference_constraints ?? raw.inputReferenceConstraints);
 
   const id = asString(raw.id || raw.model || raw.slug || raw.name);
-  const inputModalities = asStringArray(architecture.input_modalities ?? architecture.inputModalities);
+  const name = asString(raw.name || raw.display_name) || id;
+  const apiDescription = asString(raw.description);
+  const tags = asStringArray(raw.tags ?? raw.model_sets ?? raw.categories);
+  // 이름·설명·태그를 합친 텍스트. 플래그가 없을 때의 보조 판정에 씁니다.
+  const haystack = `${id} ${name} ${apiDescription} ${tags.join(" ")}`.toLowerCase();
 
-  /* 채팅 첨부 능력. capabilities 플래그가 1차 근거이고, 공식 문서가 "catalog
-   * fields are additive — inspect both architecture modalities and capability
-   * flags" 라고 안내하므로 input_modalities 도 함께 봅니다. */
-  const vision = asBool(capabilities.vision) || inputModalities.includes("image");
-  const videoInput = asBool(capabilities.video_input) || inputModalities.includes("video");
-  const audioInput = asBool(capabilities.audio_input) || inputModalities.includes("audio");
-  const pdfUpload = asBool(capabilities.pdf_upload)
-    || inputModalities.includes("file")
-    || inputModalities.includes("pdf");
+  const inputModalities = modalityInputs(architecture);
 
-  /* 이미지 생성 참조 이미지 제약. */
-  const maxInputReferences = asNumber(constraints.max_items ?? constraints.maxItems) ?? 0;
+  /*
+   * 채팅 첨부 능력. 명시적 플래그 → 모달리티 목록 → 이름·설명 순으로 보고,
+   * 어느 근거도 없으면 null(모름)로 둡니다.
+   */
+  function resolveInput(names: string[], modality: string, hint: RegExp): boolean | null {
+    const flag = lookupFlag(raw, names);
+    if (flag !== null) return flag;
+    if (inputModalities.includes(modality)) return true;
+    if (mentions(haystack, hint)) return true;
+    return inputModalities.length > 0 ? false : null;
+  }
+
+  const vision = resolveInput(
+    ["vision", "supportsVision", "supports_vision", "image_input", "imageInput", "visionEnabled", "multimodal"],
+    "image",
+    /\bvision\b|\bvl\b|multimodal/,
+  );
+  const videoInput = resolveInput(
+    ["video_input", "videoInput", "supportsVideoInput", "supportsVideo", "supports_video"],
+    "video",
+    /video[- ]?input/,
+  );
+  const audioInput = resolveInput(
+    ["audio_input", "audioInput", "supportsAudioInput", "supportsAudio", "supports_audio"],
+    "audio",
+    /audio[- ]?input/,
+  );
+  // PDF는 모달리티 목록에서 "file"로 표현되기도 합니다.
+  const pdfFlag = lookupFlag(raw, ["pdf_upload", "pdfUpload", "supportsPdf", "supports_pdf", "pdf", "file_upload", "fileUpload"]);
+  const pdfUpload = pdfFlag !== null
+    ? pdfFlag
+    : inputModalities.includes("file") || inputModalities.includes("pdf")
+      ? true
+      : inputModalities.length > 0 ? false : null;
+
+  /*
+   * 이미지 생성 참조 이미지 제약. 카탈로그가 값을 싣지 않으면 null(미공개)로
+   * 두고, 정책 단계에서 기본 허용치를 적용합니다.
+   */
+  const maxInputReferences = asNumber(constraints.max_items ?? constraints.maxItems)
+    ?? paramMax(params, "input_references", "imageDataUrls", "images")
+    ?? null;
   const referenceFormats = asStringArray(constraints.formats ?? constraints.supported_formats);
   const referenceMaxBytes = asNumber(constraints.max_bytes ?? constraints.maxBytes);
 
@@ -276,12 +374,26 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const defaultResolution = paramDefault(params, "resolution", "size");
   const maxOutputImages = paramMax(params, "n", "num_images", "numImages") ?? 1;
 
-  /* 영상 생성 입력. 모델이 실제로 받는 파라미터로 판정합니다. */
-  const acceptsStartImage = hasParam(
+  /*
+   * 영상 생성 입력. 모델이 받는 파라미터로 판정하되, supported_parameters 자체가
+   * 비어 있으면(카탈로그 미수록) null로 두어 정책에서 허용 쪽으로 해석합니다.
+   */
+  const paramsKnown = params.names.size > 0;
+  const imageParam = hasParam(
     params,
-    "imageurl", "image_url", "imagedataurl", "image_data_url", "image", "input_references", "start_image",
-  ) || maxInputReferences > 0;
-  const acceptsSourceVideo = hasParam(params, "videourl", "video_url", "videodataurl", "video");
+    "imageurl", "image_url", "imagedataurl", "image_data_url", "image", "input_references", "start_image", "init_image",
+  );
+  const acceptsStartImage = imageParam || (maxInputReferences ?? 0) > 0
+    ? true
+    : mentions(haystack, /image[- ]?to[- ]?video|\bi2v\b/)
+      ? true
+      : paramsKnown ? false : null;
+  const videoParam = hasParam(params, "videourl", "video_url", "videodataurl", "source_video");
+  const acceptsSourceVideo = videoParam
+    ? true
+    : mentions(haystack, /extend|video[- ]?to[- ]?video|\bv2v\b/)
+      ? true
+      : paramsKnown ? false : null;
 
   const voiceResult = extractVoices(raw, params);
   const supportedFormats = paramValues(params, "format", "response_format", "formats")
@@ -295,12 +407,16 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   return {
     id,
     kind,
-    name: asString(raw.name || raw.display_name) || id,
+    name,
     // 공식 문서 기반 정적 한글 설명이 있으면 우선 사용하고, 없으면 API 설명을 사용합니다.
-    description: modelDescription(id) || asString(raw.description),
-    uncensored: asBool(raw.uncensored)
-      || asBool(capabilities.uncensored)
-      || asStringArray(raw.tags).some((tag) => /uncensored|nsfw/i.test(tag)),
+    description: modelDescription(id) || apiDescription,
+    /*
+     * NanoGPT는 무검열 모델을 별도 불리언으로 표시하지 않고 모델 이름에 적어
+     * 두는 경우가 많습니다(예: "DeepSeek V4 Flash Vision Exp Uncensored").
+     * 그래서 플래그가 있으면 그것을 쓰고, 없으면 이름·설명·태그에서 찾습니다.
+     */
+    uncensored: lookupFlag(raw, ["uncensored", "isUncensored", "nsfw", "is_nsfw"])
+      ?? mentions(haystack, /uncensored|unfiltered|abliterated|derestricted|jailbroken|\bnsfw\b/),
     pricing: extractPricing(raw),
 
     vision,
@@ -320,7 +436,6 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
 
     acceptsStartImage,
     acceptsSourceVideo,
-    maxStartImages: acceptsStartImage ? Math.max(1, maxInputReferences || 1) : 0,
 
     voices: voiceResult.voices,
     defaultVoice: voiceResult.defaultVoice,
@@ -341,7 +456,9 @@ export function modelDisplayLabel(model: NormalizedModel): string {
     if (model.audioInput) badges.push("오디오");
     if (model.pdfUpload) badges.push("PDF");
   } else if (model.kind === "image") {
-    if (model.maxInputReferences > 0) badges.push(`참조 ${model.maxInputReferences}`);
+    if (model.maxInputReferences !== null && model.maxInputReferences > 0) {
+      badges.push(`참조 ${model.maxInputReferences}`);
+    }
   } else if (model.kind === "video") {
     if (model.acceptsStartImage) badges.push("이미지→영상");
     if (model.acceptsSourceVideo) badges.push("영상 확장");
