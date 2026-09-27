@@ -998,7 +998,6 @@ button.new-session-button {
   position: absolute;
   z-index: 80;
   left: 0;
-  bottom: calc(100% + 8px);
   width: min(520px, calc(100vw - 32px));
   padding: 10px;
   border: 1px solid var(--border);
@@ -1006,6 +1005,9 @@ button.new-session-button {
   background: var(--surface);
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
 }
+
+.model-picker-popover.down { top: calc(100% + 8px); }
+.model-picker-popover.up { bottom: calc(100% + 8px); }
 
 .model-search-label {
   display: flex;

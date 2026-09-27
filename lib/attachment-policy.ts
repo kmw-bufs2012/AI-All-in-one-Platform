@@ -228,3 +228,23 @@ export function resolveAudioAttachmentPolicy(model: NormalizedModel | null): Aud
     maxInputLength: model?.maxInputLength ?? DEFAULT_TTS_INPUT_LENGTH,
   };
 }
+
+/*
+ * 동영상을 이해할 수 있는 멀티모달 모델인지 판정합니다.
+ * - 카탈로그가 capabilities.video_input 을 true 로 표시한 모델
+ * - 또는 비전 모델이면서, 원 개발사가 동영상 입력을 공식 지원한다고 밝힌 계열
+ *   (lib/model-attachment-limits.ts 에서 videos 가 0이 아닌 계열: Gemini, Qwen VL·
+ *   3.5+·Omni, Kimi K2.5+, GLM-V·5V, MiniMax M3, Gemma 4, ERNIE, Doubao Seed 등과
+ *   그 무검열 파생 모델)
+ * 이미지만 이해하는 비전 모델(Claude, GPT, Llama 4, Mistral, DeepSeek Vision 등)은
+ * 제외합니다. 카탈로그의 video_input=false 는 모달리티 문자열에서 추정된 값인 경우가
+ * 많아(예: "text+image->text") 제외 근거로 쓰지 않습니다. 이런 모델은 프레임 방식으로
+ * 동영상을 전달합니다.
+ */
+export function isVideoCapableModel(model: NormalizedModel): boolean {
+  if (model.kind !== "text") return false;
+  if (model.videoInput === true) return true;
+  if (model.vision === false) return false;
+  const official = findChatLimit(model.id, model.name);
+  return official !== null && official.videos !== 0;
+}
