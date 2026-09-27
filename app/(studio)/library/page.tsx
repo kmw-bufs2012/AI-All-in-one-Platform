@@ -2,8 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useStudioState } from "@/components/StudioState";
+import { AssetViewer, type ViewerAsset } from "@/components/AssetViewer";
+import { uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { Icon, type IconName } from "@/components/Icon";
-import { EmptyState, Lightbox, formatFileSize } from "@/components/studio-ui";
+import { EmptyState, formatFileSize } from "@/components/studio-ui";
 import {
   MAX_TOTAL_BYTES,
   RETENTION_DAYS,
@@ -24,6 +28,13 @@ interface Asset {
   jobId: number;
   kind: AssetKind;
   url: string;
+  /** 원래 파일 주소(보관함 사본으로 바뀌기 전). */
+  sourceUrl: string;
+  /** 같은 작업에서 나온 결과 개수. 1개면 삭제 시 작업 기록도 지웁니다. */
+  siblings: number;
+  references: AttachedFile[];
+  cost: number | null;
+  currency: string | null;
   model: string | null;
   prompt: string;
   createdAt: string;
@@ -37,6 +48,9 @@ interface JobRecord {
   model: string | null;
   prompt: string | null;
   status: string;
+  attachments: AttachedFile[] | null;
+  cost: number | null;
+  currency: string | null;
   result: { kind?: string; urls?: string[] } | null;
   createdAt: string;
 }
@@ -75,6 +89,13 @@ function toAssets(jobs: JobRecord[]): Asset[] {
         jobId: job.id,
         kind,
         url,
+        sourceUrl: url,
+        siblings: urls.length,
+        references: Array.isArray(job.attachments)
+          ? job.attachments.filter((item) => item && (item.kind === "image" || item.kind === "video") && typeof item.url === "string")
+          : [],
+        cost: typeof job.cost === "number" ? job.cost : null,
+        currency: job.currency ?? null,
         model: job.model,
         prompt: job.prompt ?? "",
         createdAt: job.createdAt,
@@ -84,12 +105,45 @@ function toAssets(jobs: JobRecord[]): Asset[] {
   return assets;
 }
 
+/* 태그·숨김 기록은 이 브라우저에만 저장합니다(원래 파일 주소 기준). */
+const TAGS_KEY = "library:tags";
+const HIDDEN_KEY = "library:hidden";
+
+function readStore<T>(key: string, fallback: T): T {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStore(key: string, value: unknown): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // 저장소를 쓸 수 없으면 이번 세션에서만 유지됩니다.
+  }
+}
+
 export default function LibraryPage() {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [lightbox, setLightbox] = useState<string | null>(null);
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const [hidden, setHidden] = useState<string[]>([]);
+  const [tags, setTagsState] = useState<Record<string, string[]>>({});
+  const router = useRouter();
+  const [, setVideoPrompt] = useStudioState<string>("video:prompt", "");
+  const [, setVideoStartImage] = useStudioState<AttachedFile | null>("video:startImage", null);
+  const [, setImagePrompt] = useStudioState<string>("image:prompt", "");
+  const [, setImageRefs] = useStudioState<AttachedFile[]>("image:refs", []);
+
+  useEffect(() => {
+    setHidden(readStore<string[]>(HIDDEN_KEY, []));
+    setTagsState(readStore<Record<string, string[]>>(TAGS_KEY, {}));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -179,14 +233,22 @@ export default function LibraryPage() {
         jobId: -1,
         kind: item.kind,
         url: vaultUrls[item.id],
+        sourceUrl: item.sourceUrl,
+        siblings: 1,
+        references: [],
+        cost: null,
+        currency: null,
         model: item.model,
         prompt: item.prompt,
         createdAt: new Date(item.savedAt - new Date().getTimezoneOffset() * 60000).toISOString(),
         vault: item,
       });
     }
-    return merged.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-  }, [jobs, vaultItems, vaultUrls]);
+    const hiddenSet = new Set(hidden);
+    return merged
+      .filter((asset) => !hiddenSet.has(asset.sourceUrl))
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }, [jobs, vaultItems, vaultUrls, hidden]);
   const counts = useMemo(() => {
     const base: Record<Filter, number> = { all: assets.length, image: 0, video: 0, audio: 0 };
     for (const asset of assets) base[asset.kind] += 1;
@@ -204,6 +266,76 @@ export default function LibraryPage() {
     }
     return Array.from(map.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [assets, filter]);
+
+  /* 상세 보기에서 이동할 목록: 화면에 보이는 순서의 이미지·영상. */
+  const viewerAssets: Array<Asset & { kind: "image" | "video" }> = useMemo(
+    () =>
+      groups.flatMap(([, items]) =>
+        items.filter((asset): asset is Asset & { kind: "image" | "video" } => asset.kind !== "audio"),
+      ),
+    [groups],
+  );
+
+  function openViewer(asset: Asset) {
+    const index = viewerAssets.findIndex((item) => item.id === asset.id);
+    if (index >= 0) setViewerIndex(index);
+  }
+
+  async function assetAsAttachment(asset: ViewerAsset): Promise<AttachedFile> {
+    const blob = await fetch(asset.url).then((response) => {
+      if (!response.ok) throw new Error("파일을 불러오지 못했습니다.");
+      return response.blob();
+    });
+    const extension = asset.kind === "video" ? "mp4" : (blob.type.split("/")[1] || "png");
+    const [uploaded] = await uploadFiles([new File([blob], `library-${asset.id}.${extension}`, { type: blob.type })]);
+    return uploaded;
+  }
+
+  const viewerActions = {
+    onMakeVideo: async (asset: ViewerAsset) => {
+      try {
+        setVideoStartImage(await assetAsAttachment(asset));
+        router.push("/create/video");
+      } catch (actionError) {
+        setError(actionError instanceof Error ? actionError.message : "영상 만들기로 넘기지 못했습니다.");
+      }
+    },
+    onRemakeImage: async (asset: ViewerAsset) => {
+      try {
+        setImageRefs([await assetAsAttachment(asset)]);
+        setImagePrompt(asset.prompt);
+        router.push("/create/image");
+      } catch (actionError) {
+        setError(actionError instanceof Error ? actionError.message : "이미지 만들기로 넘기지 못했습니다.");
+      }
+    },
+    onRecreateVideo: (asset: ViewerAsset) => {
+      setVideoPrompt(asset.prompt);
+      const startImage = asset.references.find((ref) => ref.kind === "image");
+      if (startImage) setVideoStartImage(startImage);
+      router.push("/create/video");
+    },
+    onDelete: async (asset: ViewerAsset) => {
+      if (!window.confirm("이 결과물을 라이브러리와 이 기기 보관함에서 삭제할까요?")) return;
+      const full = assets.find((item) => item.id === asset.id);
+      if (full?.vault) await removeVaultItems([full.vault.id]).catch(() => {});
+      if (full && full.jobId > 0 && full.siblings <= 1) {
+        await fetch(`/api/jobs?id=${full.jobId}`, { method: "DELETE" }).catch(() => {});
+      }
+      const nextHidden = Array.from(new Set([...hidden, asset.sourceUrl]));
+      setHidden(nextHidden);
+      writeStore(HIDDEN_KEY, nextHidden);
+      setViewerIndex(null);
+      loadVault();
+    },
+    getTags: (asset: ViewerAsset) => tags[asset.sourceUrl] ?? [],
+    setTags: (asset: ViewerAsset, next: string[]) => {
+      const updated = { ...tags, [asset.sourceUrl]: next };
+      if (next.length === 0) delete updated[asset.sourceUrl];
+      setTagsState(updated);
+      writeStore(TAGS_KEY, updated);
+    },
+  };
 
   return (
     <div className="page-pad">
@@ -312,8 +444,18 @@ export default function LibraryPage() {
               }
               if (asset.kind === "video") {
                 return (
-                  <div key={asset.id} className="asset-tile video-tile" title={asset.prompt}>
-                    <video src={asset.url} controls preload="metadata" />
+                  <div key={asset.id} className="asset-tile video-tile" title={asset.prompt} onClick={() => openViewer(asset)}>
+                    <video
+                      src={asset.url}
+                      muted
+                      playsInline
+                      preload="metadata"
+                      onMouseEnter={(event) => event.currentTarget.play().catch(() => {})}
+                      onMouseLeave={(event) => {
+                        event.currentTarget.pause();
+                        event.currentTarget.currentTime = 0;
+                      }}
+                    />
                     <div className="asset-overlay">
                       <span className="asset-badge">{KIND_LABEL.video}</span>
                       {asset.vault ? <VaultControls item={asset.vault} onPin={togglePin} onRemove={removeFromVault} /> : null}
@@ -322,7 +464,7 @@ export default function LibraryPage() {
                 );
               }
               return (
-                <div key={asset.id} className="asset-tile" title={asset.prompt} onClick={() => setLightbox(asset.url)}>
+                <div key={asset.id} className="asset-tile" title={asset.prompt} onClick={() => openViewer(asset)}>
                   <img src={asset.url} alt={asset.prompt || "생성 이미지"} loading="lazy" />
                   <div className="asset-overlay">
                     <span className="asset-badge">{KIND_LABEL.image}</span>
@@ -345,7 +487,15 @@ export default function LibraryPage() {
         </section>
       ))}
 
-      <Lightbox src={lightbox} onClose={() => setLightbox(null)} />
+      {viewerIndex !== null && viewerAssets[viewerIndex] ? (
+        <AssetViewer
+          assets={viewerAssets.map((asset) => ({ ...asset, size: asset.vault?.size ?? null }))}
+          index={viewerIndex}
+          onIndexChange={setViewerIndex}
+          onClose={() => setViewerIndex(null)}
+          actions={viewerActions}
+        />
+      ) : null}
     </div>
   );
 }

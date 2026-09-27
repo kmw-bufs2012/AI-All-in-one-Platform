@@ -170,6 +170,10 @@ export function listJobs(db: DatabaseSync, filters: { mode?: string; date?: stri
   return db.prepare(`SELECT * FROM jobs${where} ORDER BY id DESC LIMIT ?`).all(...params) as unknown as JobRow[];
 }
 
+export function deleteJob(db: DatabaseSync, id: number): void {
+  db.prepare("DELETE FROM jobs WHERE id = ?").run(id);
+}
+
 export function insertPrompt(db: DatabaseSync, name: string, content: string): PromptRow {
   const result = db.prepare("INSERT INTO prompts (name, content) VALUES (?, ?)").run(name, content);
   const id = Number(result.lastInsertRowid);
