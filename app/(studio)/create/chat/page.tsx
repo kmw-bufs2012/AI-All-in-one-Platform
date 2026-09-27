@@ -18,6 +18,8 @@ import {
 import {
   MAX_VIDEO_BYTES,
   extractVideoFrames,
+  attachmentBlob,
+  getLocalFile,
   needsVideoCompression,
   recordJob,
   uploadFiles,
@@ -236,10 +238,7 @@ export default function ChatPage() {
       const groups: { name: string; count: number }[] = [];
       for (const videoAtt of videoAtts) {
         try {
-          const blob = await fetch(videoAtt.url).then((response) => {
-            if (!response.ok) throw new Error("동영상 파일을 불러오지 못했습니다.");
-            return response.blob();
-          });
+          const blob = await attachmentBlob(videoAtt);
           const videoFile = new File([blob], videoAtt.name, { type: videoAtt.mime || blob.type });
           const extracted = await extractVideoFrames(videoFile, Math.min(policy.frameCount, perVideo));
           collected.push(...extracted);
@@ -288,6 +287,29 @@ export default function ChatPage() {
     const streamStartedAt = Date.now();
 
     try {
+      /*
+       * 브라우저에 사본이 있는 이미지는 data URL 로 직접 보냅니다(서버 임시
+       * 저장소에서 파일을 못 찾는 문제 방지). /api/chat 본문 4.5MB 한도 안에서
+       * 프레임과 합쳐 약 3.5MB까지만 인라인하고, 나머지는 ID로 보냅니다.
+       */
+      const inlineImages: string[] = [];
+      const idImages: string[] = [];
+      let inlineBytes = frames.reduce((sum, frame) => sum + frame.length, 0);
+      for (const item of snapshot.filter((entry) => entry.kind === "image")) {
+        const local = getLocalFile(item.id);
+        if (local && inlineBytes + local.size * 1.37 < 3.5 * 1024 * 1024) {
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(local);
+          });
+          inlineImages.push(dataUrl);
+          inlineBytes += dataUrl.length;
+        } else {
+          idImages.push(item.id);
+        }
+      }
       const postChat = (sendNativeVideo: boolean) =>
         fetch("/api/chat", {
           method: "POST",
@@ -296,7 +318,7 @@ export default function ChatPage() {
             model: model.id,
             messages: [...history, { role: "user", content: text }],
             attachments: {
-              images: snapshot.filter((item) => item.kind === "image").map((item) => item.id),
+              images: idImages,
               docs: snapshot.filter((item) => item.kind === "doc").map((item) => item.id),
               videos: sendNativeVideo
                 ? snapshot.filter((item) => item.kind === "video").map((item) => item.id)
@@ -307,6 +329,7 @@ export default function ChatPage() {
             },
             frames,
             frameGroups,
+            inlineImages,
             pdfAllowed: policy.pdfAllowed,
           }),
         });

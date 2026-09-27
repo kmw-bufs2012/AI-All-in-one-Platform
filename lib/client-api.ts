@@ -203,6 +203,32 @@ async function uploadFileWhole(file: File): Promise<AttachedFile> {
   return uploaded[0] as AttachedFile;
 }
 
+/*
+ * 업로드한 원본(압축·축소 후) 파일을 브라우저 메모리에 보관합니다.
+ * Vercel 같은 서버리스 환경에서는 업로드한 파일이 한 인스턴스의 /tmp 에만
+ * 저장되어, 다른 인스턴스가 받은 /api/files 요청은 404가 날 수 있습니다.
+ * 그래서 프레임 추출·이미지 인라인 전송처럼 브라우저가 파일 내용을 다시
+ * 읽어야 할 때는 서버에서 내려받지 않고 이 사본을 씁니다.
+ */
+const localFiles = new Map<string, File>();
+
+export function getLocalFile(id: string): File | null {
+  return localFiles.get(id) ?? null;
+}
+
+/** 첨부 파일 내용을 읽습니다. 브라우저 사본이 있으면 서버를 거치지 않습니다. */
+export async function attachmentBlob(file: AttachedFile): Promise<Blob> {
+  const local = localFiles.get(file.id);
+  if (local) return local;
+  const response = await fetch(file.url);
+  if (!response.ok) {
+    throw new Error(
+      "동영상 파일을 불러오지 못했습니다. 서버에 저장된 첨부가 사라졌을 수 있습니다(서버리스 환경의 임시 저장소). 파일을 다시 첨부해 주세요.",
+    );
+  }
+  return response.blob();
+}
+
 export async function uploadFiles(
   files: File[],
   onProgress?: (fileIndex: number, fraction: number) => void,
@@ -216,11 +242,11 @@ export async function uploadFiles(
   const uploaded: AttachedFile[] = [];
   for (let i = 0; i < prepared.length; i++) {
     const file = prepared[i];
-    uploaded.push(
-      file.size > CHUNK_UPLOAD_THRESHOLD
-        ? await uploadFileChunked(file, (fraction) => onProgress?.(i, fraction))
-        : await uploadFileWhole(file),
-    );
+    const result = file.size > CHUNK_UPLOAD_THRESHOLD
+      ? await uploadFileChunked(file, (fraction) => onProgress?.(i, fraction))
+      : await uploadFileWhole(file);
+    localFiles.set(result.id, file);
+    uploaded.push(result);
   }
   return uploaded;
 }

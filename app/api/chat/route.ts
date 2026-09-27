@@ -70,6 +70,7 @@ export async function POST(request: NextRequest) {
     attachments?: { images?: unknown; docs?: unknown; videos?: unknown; audios?: unknown };
     frames?: unknown;
     frameGroups?: unknown;
+    inlineImages?: unknown;
     pdfAllowed?: unknown;
   };
   try {
@@ -112,6 +113,33 @@ export async function POST(request: NextRequest) {
   }
   if (lastMessage.content) {
     parts.push({ type: "text", text: lastMessage.content });
+  }
+
+  const inlineImages: string[] = Array.isArray(body.inlineImages)
+    ? (body.inlineImages as unknown[]).filter((value): value is string =>
+        typeof value === "string" && value.startsWith("data:image/")).slice(0, MAX_IMAGES)
+    : [];
+  for (const url of inlineImages) {
+    parts.push({ type: "image_url", image_url: { url } });
+  }
+
+  /*
+   * 서버리스 환경에서는 업로드 파일이 다른 인스턴스의 /tmp 에 있어 찾지 못할 수
+   * 있습니다. 조용히 빼고 보내면 모델이 "첨부가 없다"고 답하므로 오류로 알립니다.
+   */
+  const missing: string[] = [];
+  for (const id of [...imageIds, ...videoIds, ...audioIds, ...docIds]) {
+    if (!(await resolveAttachmentFile(id))) missing.push(id);
+  }
+  if (missing.length > 0) {
+    return NextResponse.json(
+      {
+        error:
+          "서버에서 첨부 파일을 찾지 못했습니다. 서버리스 환경의 임시 저장소가 바뀌었을 수 있습니다. 파일을 다시 첨부한 뒤 보내 주세요.",
+        missing,
+      },
+      { status: 409 },
+    );
   }
 
   for (const id of imageIds) {

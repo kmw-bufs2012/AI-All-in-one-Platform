@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useModels } from "@/components/useModels";
 import { ModelChip, AttachStrip } from "@/components/studio-ui";
 import { resolveChatAttachmentPolicy, MAX_TOTAL_FRAMES } from "@/lib/attachment-policy";
-import { uploadFiles, extractVideoFrames, type AttachedFile } from "@/lib/client-api";
+import { uploadFiles, extractVideoFrames, attachmentBlob, type AttachedFile } from "@/lib/client-api";
 import {
   buildAnalysisPrompt,
   buildDirectPrompt,
@@ -58,10 +58,7 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
     if (policy.videoNative) {
       return { attachments: { videos: [attached.id] }, frames: [], frameGroups: [] };
     }
-    const blob = await fetch(attached.url).then((response) => {
-      if (!response.ok) throw new Error("동영상 파일을 불러오지 못했습니다.");
-      return response.blob();
-    });
+    const blob = await attachmentBlob(attached);
     const count = Math.max(1, Math.min(MAX_TOTAL_FRAMES, policy.image.max));
     const frames = await extractVideoFrames(new File([blob], attached.name, { type: attached.mime || blob.type }), count);
     return { attachments: {}, frames, frameGroups: [{ name: attached.name, count: frames.length }] };
