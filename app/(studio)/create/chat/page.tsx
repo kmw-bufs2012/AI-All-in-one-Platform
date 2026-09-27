@@ -207,21 +207,34 @@ export default function ChatPage() {
     const videoNative = policy.videoNative;
     let frames: string[] = [];
     let framesCount = 0;
+    const frameGroups: { name: string; count: number }[] = [];
     // 동영상을 직접 지원하는 모델(capabilities.video_input)은 video_url 파트로
-    // 그대로 전송합니다. 비전 전용 모델은 프레임을 뽑아 이미지로 보냅니다.
+    // 그대로 전송합니다. 비전 전용 모델은 첨부한 모든 동영상에서 프레임을 뽑아
+    // 이미지로 보냅니다. 추출에 실패하면 조용히 넘어가지 않고 알려 줍니다.
     if (!videoNative && hasVision) {
-      const videoAtt = snapshot.find((item) => item.kind === "video");
-      if (videoAtt) {
+      const videoAtts = snapshot.filter((item) => item.kind === "video");
+      const perVideo = Math.max(2, Math.floor(12 / Math.max(1, videoAtts.length)));
+      for (const videoAtt of videoAtts) {
         try {
-          const blob = await fetch(videoAtt.url).then((response) => response.blob());
-          const videoFile = new File([blob], videoAtt.name, { type: videoAtt.mime });
-          frames = await extractVideoFrames(videoFile, policy.frameCount);
-          framesCount = frames.length;
-        } catch {
-          frames = [];
-          framesCount = 0;
+          const blob = await fetch(videoAtt.url).then((response) => {
+            if (!response.ok) throw new Error("동영상 파일을 불러오지 못했습니다.");
+            return response.blob();
+          });
+          const videoFile = new File([blob], videoAtt.name, { type: videoAtt.mime || blob.type });
+          const extracted = await extractVideoFrames(videoFile, Math.min(policy.frameCount, perVideo));
+          frames.push(...extracted);
+          frameGroups.push({ name: videoAtt.name, count: extracted.length });
+        } catch (frameError) {
+          setError(
+            `동영상 «${videoAtt.name}»에서 프레임을 뽑지 못했습니다: ${
+              frameError instanceof Error ? frameError.message : "알 수 없는 오류"
+            }`,
+          );
+          setSending(false);
+          return;
         }
       }
+      framesCount = frames.length;
     }
 
     const history = messages.map((message) => ({ role: message.role, content: message.content }));
@@ -260,6 +273,7 @@ export default function ChatPage() {
               : undefined,
           },
           frames,
+          frameGroups,
           pdfAllowed: policy.pdfAllowed,
         }),
       });

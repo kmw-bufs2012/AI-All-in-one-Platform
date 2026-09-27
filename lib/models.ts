@@ -500,7 +500,7 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const videoInput = resolveInput(
     ["video_input", "videoInput", "supportsVideoInput", "supportsVideo", "supports_video"],
     "video",
-    /video[- ]?input/,
+    /video[- ]?(input|understanding)|\bvideo\b.{0,20}\b(input|understand)/,
   );
   const audioInput = resolveInput(
     ["audio_input", "audioInput", "supportsAudioInput", "supportsAudio", "supports_audio"],
@@ -660,7 +660,8 @@ export function modelDisplayLabel(model: NormalizedModel): string {
   const badges: string[] = [];
   if (model.kind === "text") {
     if (model.vision) badges.push("비전");
-    if (model.videoInput) badges.push("영상");
+    // 무검열 비전 모델 중 동영상을 인식하는 모델은 "동영상"을 따로 표시합니다.
+    if (model.videoInput) badges.push("동영상");
     if (model.audioInput) badges.push("오디오");
     if (model.pdfUpload) badges.push("PDF");
   } else if (model.kind === "image") {

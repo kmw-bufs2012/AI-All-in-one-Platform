@@ -68,6 +68,11 @@ export function useModels(kind: ModelKind): ModelsHook {
       setTranslation({ text: null, loading: false, error: "" });
       return;
     }
+    // 이미 한글로 된 설명(lib/model-descriptions.ts)은 번역 없이 그대로 씁니다.
+    if (/[\uac00-\ud7a3]/.test(description)) {
+      setTranslation({ text: description, loading: false, error: "" });
+      return;
+    }
     let cancelled = false;
     setTranslation({ text: null, loading: true, error: "" });
     fetch("/api/translate", {
