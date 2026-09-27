@@ -237,3 +237,36 @@ platform.kimi.ai는 이 세션에서 직접 접속이 차단(EGRESS_BLOCKED)되�
 
 텍스트 전용이라 첨부를 받지 않는 모델: DeepSeek V3.2 / V4 Pro, Kimi K2 Thinking, GLM-4.6 / 4.7 / 5,
 MiniMax M2 / M2.1 / M2.5 / M2.7, Hunyuan Hy3 (텍스트 중심).
+
+## 무검열 파생 모델 (2026-09-27 조사)
+
+`lib/model-attachment-limits.ts`의 `findUncensoredFamily`와 `lib/models.ts`의 비전 판정에 반영했습니다.
+무검열 모델은 공개 모델을 파인튜닝하거나 거절 방향을 제거(abliteration, derestriction, heretic)한
+파생 모델입니다. 이미지 입력 지원은 원본 모델을 따릅니다. abliteration은 보통 텍스트 부분만
+수정하고 비전 인코더는 그대로 둡니다(huihui-ai 모델 카드).
+
+판정 우선순위: 카탈로그의 명시적 플래그 → 입력 모달리티 → 무검열 계열 표 → 이름 힌트.
+첨부 개수는 원본 모델의 공식 한도를 적용합니다.
+
+| 계열 | 원본 | 이미지 | 동영상(프레임) | 근거 |
+|---|---|---|---|---|
+| Venice Uncensored (Dolphin Mistral 24B Venice Edition) | Mistral Small 24B 2501 | 불가 | 불가 | venice.ai 블로그, HF dphn |
+| Dolphin 2.x / 3.0 | Mistral·Llama | 불가 | 불가 | HF dphn/Dolphin3.0-Mistral-24B |
+| Nous Hermes 3 / 4 | Llama 3.1 70B/405B | 불가 | 불가 | OpenRouter hermes-4-405b |
+| gpt-oss Derestricted/abliterated | gpt-oss-20b/120b | 불가 | 불가 | HF ArliAI |
+| GLM-4.5-Air Derestricted 등 | GLM-4.5/4.6/4.7 | 불가 | 불가 | HF ArliAI |
+| Qwen2.5 / Qwen3 abliterated·Josiefied | Qwen 텍스트 모델 | 불가 | 불가 | HF huihui-ai |
+| Euryale·Magnum·Cydonia 등 롤플레이 파인튜닝 | Llama 3.x·Mistral | 불가 | 불가 | 각 HF 카드 |
+| Qwen2.5-VL / Qwen3-VL abliterated·Heretic | Qwen VL | 가능(20) | 가능(3) | HF huihui-ai, DreamFast |
+| Qwen 3.5~3.8 Uncensored/Derestricted/Obliterated | Qwen3.5/3.6/3.8 (네이티브 멀티모달) | 가능 | 가능 | HF ArliAI, nano-gpt.com 모델 페이지 |
+| Gemma 3 (4B 이상) / Gemma 4 abliterated·Heretic | Gemma | 가능 | Gemma 4만 직접 입력(약 60초) | ai.google.dev/gemma |
+| Llama 4 Scout abliterated | Llama 4 | 5장 | 2개 | llama.com |
+| Llama 3.2 Vision abliterated | Llama 3.2 11B/90B Vision | 1장 | 불가 | HF mlx-community |
+| Mistral Small 3.1/3.2 무검열 | Mistral Small 3.1+ | 가능(8) | 불가 | docs.mistral.ai |
+| DeepSeek V4 Flash Vision Uncensored | DeepSeek Vision | 가능 | 불가(프레임만) | api-docs.deepseek.com |
+| GLM 5.3 Flash Uncensored, Abliterated Model Large V2 | GLM-5.3-Flash | 제공자별 상이 → 카탈로그 값 | | nano-gpt.com, x.com/NanoGPTcom |
+
+한계:
+- nano-gpt.com은 이 세션에서 직접 접속이 차단되어, NanoGPT의 실제 무검열 모델 전체 목록은 확인하지 못했습니다.
+- 위 계열은 검색으로 확인되는 대표 모델입니다. 배포 환경에서 `/api/models?type=text&debug=1`로
+  실제 ID를 확인해 보완하는 것이 좋습니다.

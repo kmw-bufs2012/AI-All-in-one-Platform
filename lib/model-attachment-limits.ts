@@ -107,6 +107,23 @@ const CHAT_LIMITS: Array<{ pattern: RegExp; limit: ChatLimit }> = [
     pattern: /hunyuan.*vision/i,
     limit: { family: "Tencent Hunyuan Vision", images: null, videos: null, audios: 0, totalBytes: null, imageBytes: null, source: "Tencent Hunyuan 공식 발표 (이미지·동영상 입력, 개수 미공개)" },
   },
+  /* ---- 오픈 웨이트 멀티모달 (무검열 파생 모델의 원본으로 자주 쓰임) ---- */
+  {
+    pattern: /qwen3\.[5-9]-?\d+b/i,
+    limit: { family: "Qwen 3.5~3.8 오픈 웨이트 (네이티브 멀티모달)", images: null, videos: null, audios: 0, totalBytes: null, imageBytes: null, source: "alibabacloud.com/help/en/model-studio/vision, huggingface.co/Qwen" },
+  },
+  {
+    pattern: /gemma-?4/i,
+    limit: { family: "Google Gemma 4", images: null, videos: null, audios: null, totalBytes: null, imageBytes: null, source: "ai.google.dev/gemma/docs/core (동영상 약 60초·오디오 30초 처리)" },
+  },
+  {
+    pattern: /gemma-?3-?(4|12|27)b/i,
+    limit: { family: "Google Gemma 3", images: null, videos: 0, audios: 0, totalBytes: null, imageBytes: null, source: "ai.google.dev/gemma/docs/core (이미지 입력, 1B는 텍스트 전용)" },
+  },
+  {
+    pattern: /llama-?3\.2.*vision/i,
+    limit: { family: "Meta Llama 3.2 Vision", images: 1, videos: 0, audios: 0, totalBytes: null, imageBytes: null, source: "llama.com Llama 3.2 모델 카드 (프롬프트당 이미지 1장 권장)" },
+  },
   {
     pattern: /llama-?4|maverick|scout/i,
     limit: { family: "Meta Llama 4", images: 5, videos: 0, audios: 0, totalBytes: null, imageBytes: null, source: "llama.com/docs/model-cards-and-prompt-formats/llama4" },
@@ -124,7 +141,7 @@ const CHAT_LIMITS: Array<{ pattern: RegExp; limit: ChatLimit }> = [
     limit: { family: "xAI Grok", images: null, videos: 0, audios: 0, totalBytes: null, imageBytes: 10 * MB, source: "docs.x.ai/developers/model-capabilities/images/understanding" },
   },
   {
-    pattern: /gpt|chatgpt|\bo[134](-|$)|openai/i,
+    pattern: /gpt(?!-?oss)|chatgpt|\bo[134](-|$)|openai/i,
     limit: { family: "OpenAI GPT", images: 500, videos: 0, audios: null, totalBytes: 50 * MB, imageBytes: null, source: "developers.openai.com/api/docs/guides/images-vision" },
   },
 ];
@@ -178,4 +195,53 @@ const VIDEO_INPUT_LIMITS: Array<{ pattern: RegExp; limit: VideoInputLimit }> = [
 export function findVideoInputLimit(id: string, name: string): VideoInputLimit | null {
   const haystack = `${id} ${name}`;
   return VIDEO_INPUT_LIMITS.find((entry) => entry.pattern.test(haystack))?.limit ?? null;
+}
+
+/*
+ * 무검열 파생 모델 계열 (2026-09-27 조사).
+ *
+ * 무검열 모델은 대부분 공개 모델을 추가 학습(파인튜닝)하거나 거절 방향을 제거한
+ * (abliteration·derestriction·heretic) 파생 모델입니다. 이미지 입력 지원 여부는
+ * 원본 모델을 따릅니다. abliteration은 텍스트 부분만 수정하고 비전 인코더는 그대로
+ * 두는 것이 일반적입니다(huihui-ai 모델 카드 참고). 반대로 원본이 텍스트 전용이면
+ * 파생 모델도 텍스트 전용입니다.
+ *
+ * vision: true/false 는 원본 모델 기준으로 확인한 값입니다. null 은 호스팅 제공자에
+ * 따라 다르다는 뜻이며, 이때는 카탈로그 값을 따릅니다. 카탈로그의 명시적 플래그는
+ * 언제나 이 표보다 우선합니다(lib/models.ts).
+ * 첨부 개수 한도는 원본 모델 패턴(findChatLimit)으로 따로 찾습니다.
+ */
+export interface UncensoredFamily {
+  family: string;
+  base: string;
+  vision: boolean | null;
+  source: string;
+}
+
+const UNCENSORED_FAMILIES: Array<{ pattern: RegExp; info: UncensoredFamily }> = [
+  // 비전 지원 원본에서 파생된 모델
+  { pattern: /qwen[\d.]*-?vl|qvq/i, info: { family: "Qwen VL 무검열(abliterated·heretic)", base: "Qwen2.5-VL / Qwen3-VL", vision: true, source: "huggingface.co/huihui-ai (텍스트 부분만 abliteration, 이미지 부분 유지)" } },
+  { pattern: /qwen3\.[5-9]/i, info: { family: "Qwen 3.5~3.8 무검열(derestricted·uncensored·obliterated)", base: "Qwen3.5/3.6/3.8 (네이티브 멀티모달)", vision: true, source: "huggingface.co/ArliAI/Qwen3.5-27B-Derestricted, nano-gpt.com 모델 페이지" } },
+  { pattern: /gemma-?(4|3-?(4|12|27)b)/i, info: { family: "Gemma 3/4 무검열(abliterated·heretic)", base: "Gemma 3 4B 이상 / Gemma 4", vision: true, source: "huggingface.co/huihui-ai/gemma-3-4b-it-abliterated, ai.google.dev/gemma" } },
+  { pattern: /llama-?4|scout|maverick/i, info: { family: "Llama 4 무검열(abliterated)", base: "Llama 4 Scout/Maverick", vision: true, source: "llama.com Llama 4 모델 카드" } },
+  { pattern: /llama-?3\.2.*vision/i, info: { family: "Llama 3.2 Vision 무검열", base: "Llama 3.2 11B/90B Vision", vision: true, source: "huggingface.co/mlx-community/Llama-3.2-11B-Vision-Instruct-abliterated" } },
+  { pattern: /mistral-?small-?3\.[1-9]|mistral-?small-?(2503|2506)/i, info: { family: "Mistral Small 3.1+ 무검열", base: "Mistral Small 3.1/3.2 (이미지 입력 지원)", vision: true, source: "docs.mistral.ai (vision)" } },
+  { pattern: /deepseek.*vision/i, info: { family: "DeepSeek Vision 무검열", base: "DeepSeek V4 Flash Vision", vision: true, source: "api-docs.deepseek.com/guides/vision" } },
+  // 제공자에 따라 비전 지원이 다른 모델 → 카탈로그 값을 따름
+  { pattern: /glm-?5\.\d-?flash|abliterated.?model.?large/i, info: { family: "GLM-5.3 기반 무검열", base: "GLM-5.3-Flash", vision: null, source: "nano-gpt.com (GLM 5.3 Flash Uncensored: 제공자별 비전 지원), x.com/NanoGPTcom (Abliterated Model Large V2)" } },
+  // 텍스트 전용 원본에서 파생된 모델
+  { pattern: /venice|dolphin/i, info: { family: "Venice Uncensored / Dolphin", base: "Mistral Small 24B 2501 등 (텍스트 전용)", vision: false, source: "venice.ai 블로그, huggingface.co/dphn/Dolphin-Mistral-24B-Venice-Edition" } },
+  { pattern: /hermes/i, info: { family: "Nous Hermes 3/4", base: "Llama 3.1 70B/405B (텍스트 전용)", vision: false, source: "openrouter.ai/nousresearch/hermes-4-405b" } },
+  { pattern: /gpt-?oss/i, info: { family: "gpt-oss 무검열(derestricted·abliterated)", base: "gpt-oss-20b/120b (텍스트 전용)", vision: false, source: "huggingface.co/ArliAI/gpt-oss-120b-Derestricted" } },
+  { pattern: /glm-?4\.[5-7](-?air)?(?!v)/i, info: { family: "GLM-4.5/4.6/4.7 무검열(derestricted)", base: "GLM-4.5-Air 등 (텍스트 전용)", vision: false, source: "huggingface.co/ArliAI/GLM-4.5-Air-Derestricted" } },
+  { pattern: /qwen(2\.5|3)-?\d+b|qwen3-?(coder|next)/i, info: { family: "Qwen2.5/Qwen3 텍스트 무검열(abliterated·josiefied)", base: "Qwen2.5 / Qwen3 (텍스트 전용)", vision: false, source: "huggingface.co/collections/huihui-ai/qwen3-abliterated" } },
+  { pattern: /llama-?3(\.[0-3])?|euryale|midnight|miqu|magnum|anubis|cydonia|rocinante|behemoth/i, info: { family: "Llama 3.x·Mistral 기반 롤플레이/무검열 파인튜닝", base: "Llama 3.x / Mistral 텍스트 모델", vision: false, source: "각 모델 Hugging Face 카드 (텍스트 전용 원본)" } },
+];
+
+const UNCENSORED_MARKER = /uncensored|unfiltered|abliterat|obliterat|derestrict|heretic|josiefied|jailbr|venice|dolphin|hermes|euryale|midnight|miqu|magnum|anubis|cydonia|rocinante|behemoth|\bnsfw\b/i;
+
+/** 무검열 파생 모델이면 원본 계열 정보를 돌려줍니다. 무검열 표식이 없으면 null. */
+export function findUncensoredFamily(haystack: string): UncensoredFamily | null {
+  if (!UNCENSORED_MARKER.test(haystack)) return null;
+  return UNCENSORED_FAMILIES.find((entry) => entry.pattern.test(haystack))?.info ?? null;
 }
