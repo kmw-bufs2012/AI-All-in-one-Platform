@@ -3,7 +3,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Icon, type IconName } from "@/components/Icon";
-import { EmptyState, Lightbox } from "@/components/studio-ui";
+import { EmptyState, Lightbox, formatFileSize } from "@/components/studio-ui";
+import {
+  MAX_TOTAL_BYTES,
+  RETENTION_DAYS,
+  cleanupVault,
+  daysLeft,
+  getVaultBlob,
+  listVault,
+  removeVaultItems,
+  setVaultPinned,
+  type VaultItem,
+} from "@/lib/local-vault";
 
 type AssetKind = "image" | "video" | "audio";
 type Filter = "all" | AssetKind;
@@ -16,6 +27,8 @@ interface Asset {
   model: string | null;
   prompt: string;
   createdAt: string;
+  /** 이 기기 보관함에 저장된 항목이면 그 정보. */
+  vault?: VaultItem;
 }
 
 interface JobRecord {
@@ -97,7 +110,83 @@ export default function LibraryPage() {
     load();
   }, [load]);
 
-  const assets = useMemo(() => toAssets(jobs), [jobs]);
+  /*
+   * 이 기기 보관함. 서버 파일이 사라져도 보관함의 사본(object URL)으로 표시합니다.
+   */
+  const [vaultItems, setVaultItems] = useState<VaultItem[]>([]);
+  const [vaultUrls, setVaultUrls] = useState<Record<string, string>>({});
+
+  const loadVault = useCallback(async () => {
+    try {
+      await cleanupVault();
+      const items = await listVault();
+      const urls: Record<string, string> = {};
+      for (const item of items) {
+        const blob = await getVaultBlob(item.id);
+        if (blob) urls[item.id] = URL.createObjectURL(blob);
+      }
+      setVaultItems(items);
+      setVaultUrls((previous) => {
+        Object.values(previous).forEach((url) => URL.revokeObjectURL(url));
+        return urls;
+      });
+    } catch {
+      // 사생활 보호 모드 등 IndexedDB 를 쓸 수 없으면 서버 라이브러리만 보여 줍니다.
+    }
+  }, []);
+
+  useEffect(() => {
+    loadVault();
+  }, [loadVault]);
+
+  useEffect(() => () => Object.values(vaultUrls).forEach((url) => URL.revokeObjectURL(url)), [vaultUrls]);
+
+  const vaultBytes = vaultItems.reduce((sum, item) => sum + item.size, 0);
+
+  async function togglePin(item: VaultItem) {
+    await setVaultPinned(item.id, !item.pinned).catch(() => {});
+    setVaultItems((prev) => prev.map((entry) => (entry.id === item.id ? { ...entry, pinned: !item.pinned } : entry)));
+  }
+
+  async function removeFromVault(item: VaultItem) {
+    await removeVaultItems([item.id]).catch(() => {});
+    await loadVault();
+  }
+
+  async function clearVault() {
+    const targets = vaultItems.filter((item) => !item.pinned).map((item) => item.id);
+    if (targets.length === 0) return;
+    if (!window.confirm(`고정하지 않은 보관 파일 ${targets.length}개를 이 기기에서 지웁니다. 계속할까요?`)) return;
+    await removeVaultItems(targets).catch(() => {});
+    await loadVault();
+  }
+
+  const assets = useMemo(() => {
+    const serverAssets = toAssets(jobs);
+    const bySource = new Map(vaultItems.map((item) => [item.sourceUrl, item]));
+    const matched = new Set<string>();
+    const merged = serverAssets.map((asset) => {
+      const item = bySource.get(asset.url);
+      if (!item || !vaultUrls[item.id]) return asset;
+      matched.add(item.id);
+      return { ...asset, url: vaultUrls[item.id], vault: item };
+    });
+    // 서버 기록이 사라진 보관 항목도 표시합니다.
+    for (const item of vaultItems) {
+      if (matched.has(item.id) || !vaultUrls[item.id]) continue;
+      merged.push({
+        id: `vault-${item.id}`,
+        jobId: -1,
+        kind: item.kind,
+        url: vaultUrls[item.id],
+        model: item.model,
+        prompt: item.prompt,
+        createdAt: new Date(item.savedAt - new Date().getTimezoneOffset() * 60000).toISOString(),
+        vault: item,
+      });
+    }
+    return merged.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }, [jobs, vaultItems, vaultUrls]);
   const counts = useMemo(() => {
     const base: Record<Filter, number> = { all: assets.length, image: 0, video: 0, audio: 0 };
     for (const asset of assets) base[asset.kind] += 1;
@@ -120,7 +209,7 @@ export default function LibraryPage() {
     <div className="page-pad">
       <div className="page-head">
         <h1>라이브러리</h1>
-        <p>생성한 이미지·영상·음성이 만든 날짜별로 모입니다. 사용량과 비용은 작업 기록에서 확인하세요.</p>
+        <p>생성한 이미지·영상·음성이 만든 날짜별로 모입니다. 이미지·영상은 이 브라우저에도 임시 보관되어 서버 파일이 사라져도 볼 수 있습니다.</p>
       </div>
 
       <div className="lib-bar">
@@ -140,11 +229,21 @@ export default function LibraryPage() {
           ))}
         </div>
         <span style={{ marginLeft: "auto" }} />
-        <button type="button" className="secondary" onClick={load} disabled={loading} title="새로 고침">
+        <button type="button" className="secondary" onClick={() => { load(); loadVault(); }} disabled={loading} title="새로 고침">
           <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
             <Icon name="refresh" size={15} />
             새로 고침
           </span>
+        </button>
+      </div>
+
+      <div className="muted" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, fontSize: 12.5, margin: "-4px 0 16px" }}>
+        <span>
+          이 기기 보관함: {formatFileSize(vaultBytes)} / {formatFileSize(MAX_TOTAL_BYTES)} · {vaultItems.length}개 ·
+          생성한 이미지·영상을 이 브라우저에 {RETENTION_DAYS}일간 보관합니다(고정한 파일은 계속 보관).
+        </span>
+        <button type="button" className="secondary" onClick={clearVault} disabled={vaultItems.every((item) => item.pinned)}>
+          보관함 비우기
         </button>
       </div>
 
@@ -217,6 +316,7 @@ export default function LibraryPage() {
                     <video src={asset.url} controls preload="metadata" />
                     <div className="asset-overlay">
                       <span className="asset-badge">{KIND_LABEL.video}</span>
+                      {asset.vault ? <VaultControls item={asset.vault} onPin={togglePin} onRemove={removeFromVault} /> : null}
                     </div>
                   </div>
                 );
@@ -226,6 +326,7 @@ export default function LibraryPage() {
                   <img src={asset.url} alt={asset.prompt || "생성 이미지"} loading="lazy" />
                   <div className="asset-overlay">
                     <span className="asset-badge">{KIND_LABEL.image}</span>
+                    {asset.vault ? <VaultControls item={asset.vault} onPin={togglePin} onRemove={removeFromVault} /> : null}
                     <a
                       className="asset-action"
                       href={asset.url}
@@ -246,5 +347,41 @@ export default function LibraryPage() {
 
       <Lightbox src={lightbox} onClose={() => setLightbox(null)} />
     </div>
+  );
+}
+
+function VaultControls({
+  item,
+  onPin,
+  onRemove,
+}: {
+  item: VaultItem;
+  onPin: (item: VaultItem) => void;
+  onRemove: (item: VaultItem) => void;
+}) {
+  return (
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }} onClick={(event) => event.stopPropagation()}>
+      <span className="asset-badge" title="이 기기 보관함에 저장됨">
+        {item.pinned ? "고정됨" : `보관 ${daysLeft(item)}일 남음`}
+      </span>
+      <button
+        type="button"
+        className="asset-badge"
+        style={{ cursor: "pointer", border: "none" }}
+        onClick={() => onPin(item)}
+        title={item.pinned ? "고정 해제 (보존 기간이 지나면 자동 삭제)" : "고정 (자동 삭제 제외)"}
+      >
+        {item.pinned ? "고정 해제" : "고정"}
+      </button>
+      <button
+        type="button"
+        className="asset-badge"
+        style={{ cursor: "pointer", border: "none" }}
+        onClick={() => onRemove(item)}
+        title="이 기기 보관함에서 삭제"
+      >
+        삭제
+      </button>
+    </span>
   );
 }

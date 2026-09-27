@@ -311,4 +311,29 @@ export function recordJob(payload: Record<string, unknown>): void {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }).catch(() => {});
+  autoSaveToVault(payload);
+}
+
+/*
+ * 완료된 이미지·영상 결과를 이 기기 보관함(lib/local-vault.ts)에 자동 저장합니다.
+ * 실패해도 생성 흐름에는 영향을 주지 않습니다.
+ */
+function autoSaveToVault(payload: Record<string, unknown>): void {
+  const mode = payload.mode;
+  if (payload.status !== "completed" || (mode !== "image" && mode !== "video")) return;
+  const result = payload.result as { urls?: unknown } | null | undefined;
+  const urls = Array.isArray(result?.urls) ? result.urls.filter((url): url is string => typeof url === "string") : [];
+  if (urls.length === 0) return;
+  import("./local-vault")
+    .then(async ({ saveToVault }) => {
+      for (const url of urls) {
+        await saveToVault({
+          url,
+          kind: mode,
+          model: typeof payload.model === "string" ? payload.model : null,
+          prompt: typeof payload.prompt === "string" ? payload.prompt : "",
+        }).catch(() => false);
+      }
+    })
+    .catch(() => {});
 }
