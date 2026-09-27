@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, insertJob, listJobs } from "@/lib/db";
+import { deleteJob, getDb, insertJob, listJobs } from "@/lib/db";
 
 const ALLOWED_MODES = new Set(["chat", "image", "video", "audio"]);
 
@@ -64,4 +64,13 @@ export async function POST(request: NextRequest) {
     result: body.result ?? null,
   });
   return NextResponse.json({ ok: true, id: row.id });
+}
+/** 라이브러리에서 결과물을 지울 때 작업 기록도 함께 지웁니다. */
+export async function DELETE(request: NextRequest) {
+  const id = Number(request.nextUrl.searchParams.get("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return NextResponse.json({ error: "삭제할 작업 ID가 올바르지 않습니다." }, { status: 400 });
+  }
+  deleteJob(getDb(), id);
+  return NextResponse.json({ ok: true });
 }
