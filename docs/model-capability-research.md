@@ -270,3 +270,17 @@ MiniMax M2 / M2.1 / M2.5 / M2.7, Hunyuan Hy3 (텍스트 중심).
 - nano-gpt.com은 이 세션에서 직접 접속이 차단되어, NanoGPT의 실제 무검열 모델 전체 목록은 확인하지 못했습니다.
 - 위 계열은 검색으로 확인되는 대표 모델입니다. 배포 환경에서 `/api/models?type=text&debug=1`로
   실제 ID를 확인해 보완하는 것이 좋습니다.
+
+## Seedance 2.0 Mini 마스터 프롬프트 (2026-09-27 조사)
+
+프롬프트 페이지의 "동영상 → Seedance 2.0 Mini 마스터 프롬프트" 기능(`components/VideoMasterPrompt.tsx`,
+`lib/master-prompt.ts`)에서 쓰는 작성 원칙입니다.
+- 샷 수, 총 길이, 화면비를 프롬프트 맨 위에 적습니다.
+- 주체를 먼저 쓰고 구체적인 카메라 용어를 씁니다.
+- 소리(대사, 효과음, 음악)를 프롬프트에 직접 적습니다.
+- 부정문 대신 긍정문으로 씁니다.
+- 해상도, 길이, 화면비 값은 생성 화면 설정으로 지정합니다.
+- 한 번 생성할 때 최대 15초이며, Mini는 속도와 대량 생성용 경량 버전입니다.
+
+근거: fal.ai Seedance 2.0 Prompting Guide, higgsfield.ai Seedance prompting guide, apiyi.com 공식 가이드 해설.
+Mini 전용 공식 프롬프트 문서는 찾지 못해 Seedance 2.0 공통 원칙을 적용했습니다.

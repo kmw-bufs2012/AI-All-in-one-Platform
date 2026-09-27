@@ -26,11 +26,11 @@ export interface ModelsHook {
  * 페이지별 모델 목록을 불러오고, 선택 상태를 라우트 이동과 무관하게 유지합니다.
  * 선택한 모델의 설명은 번역 API를 통해 함께 표시합니다.
  */
-export function useModels(kind: ModelKind): ModelsHook {
+export function useModels(kind: ModelKind, stateKey?: string): ModelsHook {
   const [models, setModels] = useState<NormalizedModel[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [selectedId, setSelectedId] = useStudioState<string>(`model:${kind}`, "");
+  const [selectedId, setSelectedId] = useStudioState<string>(stateKey ?? `model:${kind}`, "");
   const [translation, setTranslation] = useState<TranslationState>({ text: null, loading: false, error: "" });
 
   useEffect(() => {
