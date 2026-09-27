@@ -385,7 +385,10 @@ export function recordJob(payload: Record<string, unknown>): void {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-  }).catch(() => {});
+  })
+    // 상단 "완료된 작업" 목록이 새 작업을 바로 보여 주도록 알립니다.
+    .then(() => window.dispatchEvent(new Event("jobs:updated")))
+    .catch(() => {});
   autoSaveToVault(payload);
 }
 
