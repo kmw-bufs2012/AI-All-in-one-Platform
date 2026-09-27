@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { modelDisplayLabel } from "@/lib/models";
+import { modelDisplayLabel, type NormalizedModel } from "@/lib/models";
 import type { AttachedFile } from "@/lib/client-api";
 import { Icon, type IconName } from "./Icon";
 import type { ModelsHook } from "./useModels";
@@ -145,10 +145,37 @@ const MODEL_SEARCH_ALIASES: Record<string, string[]> = {
   "사이버펑크": ["cyberpunk"],
 };
 
-export function ModelChip({ hook }: { hook: ModelsHook }) {
+export function ModelChip({
+  hook,
+  include,
+  emptyLabel = "사용할 모델 없음",
+}: {
+  hook: ModelsHook;
+  /** 주어지면 이 조건을 만족하는 모델만 목록에 표시합니다. */
+  include?: (model: NormalizedModel) => boolean;
+  emptyLabel?: string;
+}) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const pickerRef = useRef<HTMLDivElement | null>(null);
+  /*
+   * 목록을 펼칠 방향. 기본은 아래로 펼치고, 채팅 입력창처럼 화면 아래쪽에
+   * 붙은 선택기는 아래 공간이 모자라므로 위로 펼칩니다. 남은 공간에 맞춰
+   * 목록 높이도 줄여 상단 바나 화면 밖으로 잘리지 않게 합니다.
+   */
+  const [placement, setPlacement] = useState<{ up: boolean; listMax: number }>({ up: false, listMax: 360 });
+
+  function computePlacement() {
+    const rect = pickerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const topbar = document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0;
+    const below = window.innerHeight - rect.bottom - 16;
+    const above = rect.top - topbar - 16;
+    const up = below < 320 && above > below;
+    // 검색창·개수 표시 등 목록 외 영역 약 100px 을 뺍니다.
+    const listMax = Math.max(140, Math.min(360, (up ? above : below) - 100));
+    setPlacement({ up, listMax });
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -167,10 +194,11 @@ export function ModelChip({ hook }: { hook: ModelsHook }) {
       </span>
     );
   }
-  if (!hook.models || hook.models.length === 0) {
+  const available = hook.models ? (include ? hook.models.filter(include) : hook.models) : null;
+  if (!available || available.length === 0) {
     return (
       <span className="chip" style={{ color: "var(--danger)", borderColor: "var(--danger)" }}>
-        <span className="chip-text">사용할 모델 없음</span>
+        <span className="chip-text">{emptyLabel}</span>
       </span>
     );
   }
@@ -182,7 +210,7 @@ export function ModelChip({ hook }: { hook: ModelsHook }) {
       .filter(([korean]) => normalizedQuery.includes(korean))
       .flatMap(([, aliases]) => aliases),
   ].filter(Boolean);
-  const filtered = hook.models.filter((model) => {
+  const filtered = available.filter((model) => {
     if (!normalizedQuery) return true;
     const searchable = [modelDisplayLabel(model), model.id, model.description]
       .filter(Boolean)
@@ -198,6 +226,7 @@ export function ModelChip({ hook }: { hook: ModelsHook }) {
         type="button"
         className="chip model-picker-trigger"
         onClick={() => {
+          if (!open) computePlacement();
           setOpen((previous) => !previous);
           setQuery("");
         }}
@@ -210,7 +239,7 @@ export function ModelChip({ hook }: { hook: ModelsHook }) {
         <Icon name="chevronDown" size={12} />
       </button>
       {open ? (
-        <div className="model-picker-popover">
+        <div className={`model-picker-popover ${placement.up ? "up" : "down"}`}>
           <label className="model-search-label">
             <Icon name="search" size={14} />
             <input
@@ -225,7 +254,7 @@ export function ModelChip({ hook }: { hook: ModelsHook }) {
               aria-label="모델명 또는 스타일 검색"
             />
           </label>
-          <div className="model-picker-results" role="listbox" aria-label="검색된 모델">
+          <div className="model-picker-results" role="listbox" aria-label="검색된 모델" style={{ maxHeight: placement.listMax }}>
             {filtered.length > 0 ? filtered.map((model) => (
               <button
                 key={model.id}

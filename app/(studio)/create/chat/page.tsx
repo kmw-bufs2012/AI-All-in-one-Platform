@@ -18,6 +18,8 @@ import {
 import {
   MAX_VIDEO_BYTES,
   extractVideoFrames,
+  attachmentBlob,
+  getLocalFile,
   needsVideoCompression,
   recordJob,
   uploadFiles,
@@ -224,37 +226,46 @@ export default function ChatPage() {
     const videoNative = policy.videoNative;
     let frames: string[] = [];
     let framesCount = 0;
-    const frameGroups: { name: string; count: number }[] = [];
-    // 동영상을 직접 지원하는 모델(capabilities.video_input)은 video_url 파트로
-    // 그대로 전송합니다. 비전 전용 모델은 첨부한 모든 동영상에서 프레임을 뽑아
-    // 이미지로 보냅니다. 추출에 실패하면 조용히 넘어가지 않고 알려 줍니다.
-    if (!videoNative && hasVision) {
+    let frameGroups: { name: string; count: number }[] = [];
+    // 첨부한 모든 동영상에서 프레임을 뽑습니다. 프레임은 이미지 한도에서 이미
+    // 첨부한 이미지를 뺀 만큼, 최대 MAX_TOTAL_FRAMES 장까지.
+    const buildFrames = async () => {
       const videoAtts = snapshot.filter((item) => item.kind === "video");
-      // 프레임은 이미지 한도에서 이미 첨부한 이미지를 뺀 만큼, 최대 MAX_TOTAL_FRAMES 장까지.
       const imageCount = snapshot.filter((item) => item.kind === "image").length;
       const frameBudget = Math.min(MAX_TOTAL_FRAMES, policy.image.max - imageCount);
       const perVideo = Math.max(1, Math.floor(frameBudget / Math.max(1, videoAtts.length)));
+      const collected: string[] = [];
+      const groups: { name: string; count: number }[] = [];
       for (const videoAtt of videoAtts) {
         try {
-          const blob = await fetch(videoAtt.url).then((response) => {
-            if (!response.ok) throw new Error("동영상 파일을 불러오지 못했습니다.");
-            return response.blob();
-          });
+          const blob = await attachmentBlob(videoAtt);
           const videoFile = new File([blob], videoAtt.name, { type: videoAtt.mime || blob.type });
           const extracted = await extractVideoFrames(videoFile, Math.min(policy.frameCount, perVideo));
-          frames.push(...extracted);
-          frameGroups.push({ name: videoAtt.name, count: extracted.length });
+          collected.push(...extracted);
+          groups.push({ name: videoAtt.name, count: extracted.length });
         } catch (frameError) {
-          setError(
+          throw new Error(
             `동영상 «${videoAtt.name}»에서 프레임을 뽑지 못했습니다: ${
               frameError instanceof Error ? frameError.message : "알 수 없는 오류"
             }`,
           );
-          setSending(false);
-          return;
         }
       }
-      framesCount = frames.length;
+      return { collected, groups };
+    };
+    // 동영상을 직접 지원하는 모델(capabilities.video_input)은 video_url 파트로
+    // 그대로 전송합니다. 비전 전용 모델은 프레임을 이미지로 보냅니다.
+    if (!videoNative && hasVision) {
+      try {
+        const built = await buildFrames();
+        frames = built.collected;
+        frameGroups = built.groups;
+        framesCount = frames.length;
+      } catch (frameError) {
+        setError(frameError instanceof Error ? frameError.message : "동영상 프레임을 뽑지 못했습니다.");
+        setSending(false);
+        return;
+      }
     }
 
     const history = messages.map((message) => ({ role: message.role, content: message.content }));
@@ -276,27 +287,66 @@ export default function ChatPage() {
     const streamStartedAt = Date.now();
 
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: model.id,
-          messages: [...history, { role: "user", content: text }],
-          attachments: {
-            images: snapshot.filter((item) => item.kind === "image").map((item) => item.id),
-            docs: snapshot.filter((item) => item.kind === "doc").map((item) => item.id),
-            videos: videoNative
-              ? snapshot.filter((item) => item.kind === "video").map((item) => item.id)
-              : undefined,
-            audios: policy.audio.allowed
-              ? snapshot.filter((item) => item.kind === "audio").map((item) => item.id)
-              : undefined,
-          },
-          frames,
-          frameGroups,
-          pdfAllowed: policy.pdfAllowed,
-        }),
-      });
+      /*
+       * 브라우저에 사본이 있는 이미지는 data URL 로 직접 보냅니다(서버 임시
+       * 저장소에서 파일을 못 찾는 문제 방지). /api/chat 본문 4.5MB 한도 안에서
+       * 프레임과 합쳐 약 3.5MB까지만 인라인하고, 나머지는 ID로 보냅니다.
+       */
+      const inlineImages: string[] = [];
+      const idImages: string[] = [];
+      let inlineBytes = frames.reduce((sum, frame) => sum + frame.length, 0);
+      for (const item of snapshot.filter((entry) => entry.kind === "image")) {
+        const local = getLocalFile(item.id);
+        if (local && inlineBytes + local.size * 1.37 < 3.5 * 1024 * 1024) {
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(local);
+          });
+          inlineImages.push(dataUrl);
+          inlineBytes += dataUrl.length;
+        } else {
+          idImages.push(item.id);
+        }
+      }
+      const postChat = (sendNativeVideo: boolean) =>
+        fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: model.id,
+            messages: [...history, { role: "user", content: text }],
+            attachments: {
+              images: idImages,
+              docs: snapshot.filter((item) => item.kind === "doc").map((item) => item.id),
+              videos: sendNativeVideo
+                ? snapshot.filter((item) => item.kind === "video").map((item) => item.id)
+                : undefined,
+              audios: policy.audio.allowed
+                ? snapshot.filter((item) => item.kind === "audio").map((item) => item.id)
+                : undefined,
+            },
+            frames,
+            frameGroups,
+            inlineImages,
+            pdfAllowed: policy.pdfAllowed,
+          }),
+        });
+      let response = await postChat(videoNative);
+      // 동영상 직접 입력 모델이라도 제공자가 형식(WebM 등)을 거부하면, 비전이
+      // 가능한 모델은 프레임 방식으로 한 번 더 보냅니다.
+      const hasVideo = snapshot.some((item) => item.kind === "video");
+      if (!response.ok && videoNative && hasVision && hasVideo) {
+        const built = await buildFrames();
+        frames = built.collected;
+        frameGroups = built.groups;
+        framesCount = frames.length;
+        response = await postChat(false);
+        setMessages((prev) =>
+          prev.map((message, index) => (index === prev.length - 2 ? { ...message, framesCount } : message)),
+        );
+      }
       if (!response.ok || !response.body) {
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error || "채팅 요청에 실패했습니다.");

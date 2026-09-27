@@ -65,36 +65,6 @@ ${userNote.trim() ? `\nExtra instructions from the user:\n${userNote.trim()}\n` 
 The attached video (or its frames in time order) is the reference.`;
 }
 
-/** 텍스트 전용 LLM을 쓸 때 1단계: 비전 모델이 영상을 아주 자세히 기술. */
-export function buildAnalysisPrompt(meta: VideoMeta): string {
-  return `Describe the attached reference video in exhaustive, objective detail so that another model that cannot see it can recreate it shot for shot.
-
-Reference video metadata:
-${metaLines(meta)}
-
-Cover, in English:
-- Every shot with timestamps [mm:ss-mm:ss]: shot size, camera angle, camera movement, lens feel, transitions.
-- Subjects: appearance, clothing, colors, props, actions, expressions, positions in frame.
-- Setting, time of day, weather, background, color palette.
-- Lighting, grade/look, motion speed.
-- Any visible text, and audio cues you can infer (speech, music, sound effects).
-Only describe what is visible. Do not write a prompt yet.`;
-}
-
-/** 텍스트 전용 LLM을 쓸 때 2단계: 기술 내용을 바탕으로 마스터 프롬프트 작성. */
-export function buildFromDescriptionPrompt(meta: VideoMeta, description: string, userNote: string): string {
-  return `${MASTER_RULES}
-
-Reference video metadata:
-${metaLines(meta)}
-${userNote.trim() ? `\nExtra instructions from the user:\n${userNote.trim()}\n` : ""}
-You cannot see the video. Use this detailed shot-by-shot description of it, written by a vision model:
-
-"""
-${description}
-"""`;
-}
-
 /** 응답에서 복사할 프롬프트(첫 번째 코드 블록)를 꺼냅니다. 없으면 전체 텍스트. */
 export function extractMasterPrompt(text: string): string {
   const match = text.match(/```(?:text|txt)?\s*\n([\s\S]*?)```/);

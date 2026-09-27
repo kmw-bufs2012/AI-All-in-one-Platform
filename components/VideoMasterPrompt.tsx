@@ -1,14 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useModels } from "@/components/useModels";
 import { ModelChip, AttachStrip } from "@/components/studio-ui";
-import { resolveChatAttachmentPolicy, MAX_TOTAL_FRAMES } from "@/lib/attachment-policy";
-import { uploadFiles, extractVideoFrames, type AttachedFile } from "@/lib/client-api";
+import { resolveChatAttachmentPolicy, isVideoCapableModel, MAX_TOTAL_FRAMES } from "@/lib/attachment-policy";
+import { uploadFiles, extractVideoFrames, attachmentBlob, type AttachedFile } from "@/lib/client-api";
 import {
-  buildAnalysisPrompt,
   buildDirectPrompt,
-  buildFromDescriptionPrompt,
   extractMasterPrompt,
   readVideoMeta,
   streamChat,
@@ -17,13 +15,12 @@ import {
 /*
  * 동영상 → Seedance 2.0 Mini 복붙용 마스터 프롬프트 생성기.
  *
- * - 비전(LMM) 모델을 고르면 영상(또는 프레임)을 직접 보여 주고 한 번에 생성합니다.
- * - 텍스트 전용 LLM을 고르면 "영상 분석용 비전 모델"이 먼저 영상을 샷 단위로
- *   기술하고, 선택한 LLM이 그 기술을 바탕으로 마스터 프롬프트를 씁니다.
+ * 동영상을 이해할 수 있는 멀티모달(LMM) 모델만 목록에 표시합니다
+ * (isVideoCapableModel). 모델이 동영상 직접 입력을 지원하면 영상을 그대로,
+ * 아니면 시간 순 프레임으로 보여 주고 한 번에 마스터 프롬프트를 생성합니다.
  */
 export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: string) => Promise<void> }) {
   const writer = useModels("text", "model:prompt-writer");
-  const analyzer = useModels("text", "model:prompt-analyzer");
   const [video, setVideo] = useState<AttachedFile | null>(null);
   const [note, setNote] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -34,8 +31,16 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
   const [copied, setCopied] = useState(false);
 
   const writerPolicy = resolveChatAttachmentPolicy(writer.selected);
-  const writerSeesVideo = writerPolicy.video.allowed;
-  const analyzerPolicy = resolveChatAttachmentPolicy(analyzer.selected);
+
+  // 동영상을 이해하지 못하는 모델이 선택돼 있으면 첫 번째 동영상 지원 모델로 바꿉니다.
+  useEffect(() => {
+    if (!writer.models) return;
+    if (writer.selected && isVideoCapableModel(writer.selected)) return;
+    const first = writer.models.find(isVideoCapableModel);
+    writer.setSelectedId(first?.id ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [writer.models, writer.selectedId]);
+  const writerReady = Boolean(writer.selected && isVideoCapableModel(writer.selected));
 
   async function pickVideo(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -58,62 +63,31 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
     if (policy.videoNative) {
       return { attachments: { videos: [attached.id] }, frames: [], frameGroups: [] };
     }
-    const blob = await fetch(attached.url).then((response) => {
-      if (!response.ok) throw new Error("동영상 파일을 불러오지 못했습니다.");
-      return response.blob();
-    });
+    const blob = await attachmentBlob(attached);
     const count = Math.max(1, Math.min(MAX_TOTAL_FRAMES, policy.image.max));
     const frames = await extractVideoFrames(new File([blob], attached.name, { type: attached.mime || blob.type }), count);
     return { attachments: {}, frames, frameGroups: [{ name: attached.name, count: frames.length }] };
   }
 
   async function generate() {
-    if (!video || !writer.selected) return;
+    if (!video || !writer.selected || !writerReady) return;
     setError("");
     setOutput("");
     setCopied(false);
     setRunning(true);
     try {
       const meta = await readVideoMeta(video.url, video.name);
-      if (writerSeesVideo) {
-        setStage(`${writer.selected.name}이(가) 영상을 보고 마스터 프롬프트를 작성하고 있습니다…`);
-        const payload = await videoPayload(writerPolicy, video);
-        await streamChat(
-          {
-            model: writer.selected.id,
-            messages: [{ role: "user", content: buildDirectPrompt(meta, note) }],
-            ...payload,
-            pdfAllowed: false,
-          },
-          setOutput,
-        );
-      } else {
-        if (!analyzer.selected || !analyzerPolicy.video.allowed) {
-          throw new Error("텍스트 전용 모델을 쓰려면 영상을 볼 수 있는 분석용 비전 모델을 골라 주세요.");
-        }
-        setStage(`1/2 ${analyzer.selected.name}이(가) 영상을 샷 단위로 분석하고 있습니다…`);
-        const payload = await videoPayload(analyzerPolicy, video);
-        const description = await streamChat(
-          {
-            model: analyzer.selected.id,
-            messages: [{ role: "user", content: buildAnalysisPrompt(meta) }],
-            ...payload,
-            pdfAllowed: false,
-          },
-          (text) => setOutput(`[영상 분석 중]\n\n${text}`),
-        );
-        if (!description.trim()) throw new Error("분석용 모델이 영상 설명을 돌려주지 않았습니다.");
-        setStage(`2/2 ${writer.selected.name}이(가) 마스터 프롬프트를 작성하고 있습니다…`);
-        setOutput("");
-        await streamChat(
-          {
-            model: writer.selected.id,
-            messages: [{ role: "user", content: buildFromDescriptionPrompt(meta, description, note) }],
-            pdfAllowed: false,
-          },
-          setOutput,
-        );
-      }
+      setStage(`${writer.selected.name}이(가) 영상을 보고 마스터 프롬프트를 작성하고 있습니다…`);
+      const payload = await videoPayload(writerPolicy, video);
+      await streamChat(
+        {
+          model: writer.selected.id,
+          messages: [{ role: "user", content: buildDirectPrompt(meta, note) }],
+          ...payload,
+          pdfAllowed: false,
+        },
+        setOutput,
+      );
       setStage("");
     } catch (generateError) {
       setStage("");
@@ -143,27 +117,16 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
       </p>
       <div className="stack">
         <div>
-          <label>프롬프트 작성 모델 (LLM·LMM 전체, 검색 가능)</label>
-          <ModelChip hook={writer} />
+          <label>프롬프트 작성 모델 (동영상을 이해하는 멀티모달 모델만 표시, 검색 가능)</label>
+          <ModelChip hook={writer} include={isVideoCapableModel} emptyLabel="동영상 지원 모델 없음" />
           <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
-            {writer.selected
-              ? writerSeesVideo
-                ? writerPolicy.videoNative
-                  ? "이 모델은 동영상을 직접 봅니다."
-                  : `이 모델은 동영상에서 뽑은 프레임(최대 ${Math.min(MAX_TOTAL_FRAMES, writerPolicy.image.max)}장)을 봅니다.`
-                : "텍스트 전용 모델입니다. 아래 분석용 비전 모델이 먼저 영상을 설명해 줍니다."
+            {writerReady
+              ? writerPolicy.videoNative
+                ? "이 모델은 동영상을 직접 봅니다."
+                : `이 모델에는 동영상에서 시간 순으로 뽑은 프레임(최대 ${Math.min(MAX_TOTAL_FRAMES, writerPolicy.image.max)}장)을 보냅니다.`
               : null}
           </div>
         </div>
-        {writer.selected && !writerSeesVideo ? (
-          <div>
-            <label>영상 분석용 비전 모델</label>
-            <ModelChip hook={analyzer} />
-            {analyzer.selected && !analyzerPolicy.video.allowed ? (
-              <div className="error-box" style={{ marginTop: 6 }}>이 모델은 영상을 볼 수 없습니다. 비전 모델을 골라 주세요.</div>
-            ) : null}
-          </div>
-        ) : null}
         <div>
           <label>참조 동영상</label>
           <input type="file" accept="video/*" onChange={pickVideo} disabled={uploading || running} />
@@ -181,7 +144,7 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
           />
         </div>
         {error ? <div className="error-box">{error}</div> : null}
-        <button type="button" onClick={generate} disabled={!video || !writer.selected || running || uploading}>
+        <button type="button" onClick={generate} disabled={!video || !writerReady || running || uploading}>
           {running ? "생성하고 있습니다…" : "마스터 프롬프트 생성"}
         </button>
         {stage ? <div className="muted" style={{ fontSize: 12 }}><span className="spinner" /> {stage}</div> : null}

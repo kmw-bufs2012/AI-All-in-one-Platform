@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Icon } from "./Icon";
 import { ASSETS, BREADCRUMBS, TOOLS, type NavEntry } from "./nav";
 import { StudioStateProvider } from "./StudioState";
+import { CompletedJobs } from "./CompletedJobs";
 
 const BRAND = "AI 올인원 플랫폼";
 
@@ -204,6 +205,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
             <div className="topbar-right">
               <ThemeSwitch />
+              <CompletedJobs />
               <Link href="/library" className="topbar-link">
                 <Icon name="library" size={15} />
                 <span>라이브러리</span>
