@@ -273,6 +273,7 @@ export default function VideoPage() {
             values={paramValues}
             onChange={changeParam}
           />
+          {policy.note ? <p className="muted" style={{ fontSize: 11.5, marginTop: -8, marginBottom: 12 }}>{policy.note}</p> : null}
           {durationNote ? <p className="muted" style={{ fontSize: 11.5, marginTop: -8, marginBottom: 12 }}>{durationNote}</p> : null}
 
           {results.length === 0 ? (

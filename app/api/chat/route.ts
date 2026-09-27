@@ -11,6 +11,9 @@ import {
   MAX_DOCS,
 } from "@/lib/attachments";
 
+// Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
+export const maxDuration = 300;
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /* 텍스트 문서는 파일 파트 대신 본문에 그대로 붙여 넣습니다. PDF만 파일 파트로

@@ -150,3 +150,64 @@ GPT Image(OpenAI), Grok Imagine, Hunyuan Image, Krea, Imagen(Google) 등 나머�
 1. 실제 `NANOGPT_API_KEY`로 `/v1/video-models?detailed=true`, `/v1/image-models?detailed=true`를 호출해, 위에서 조사한 모델들이 실제로 카탈로그에 어떤 ID로 존재하는지, `supported_parameters`가 이 문서의 조사 결과와 일치하는지 확인.
 2. `docs.nano-gpt.com`, `seed.bytedance.com`, `ai.google.dev` 등 이번 세션에서 접속이 막혔던 1차 문서를, 접속 가능한 환경에서 직접 열람해 근거 수준을 "중간"에서 "높음"으로 올리기.
 3. 이 문서에 없는 나머지 카탈로그 모델(수백 개)에 대한 조사 확장.
+
+## 첨부 개수 한도 (2026-09-27 조사)
+
+`lib/model-attachment-limits.ts`와 `lib/attachment-policy.ts`에 반영했습니다. 앞 절과 마찬가지로
+WebSearch 검색 결과를 근거로 했으며, 원 개발사 문서를 직접 열어 확인하지는 못했습니다.
+적용 규칙: 공식 한도와 앱 상한(Vercel Hobby 기준) 중 작은 값을 씁니다. NanoGPT 카탈로그가 더 작은
+값을 공개하면 카탈로그 값을 우선합니다.
+
+### Vercel Hobby 플랜 제약 (vercel.com/docs/functions/limitations, vercel.com/changelog 2025-06)
+
+- 함수 요청·응답 본문은 최대 4.5MB입니다. 첨부는 3MB 청크로 올리고 `/api/chat`에는 ID만 보냅니다.
+  프레임 방식은 JPEG 프레임이 본문에 실리므로 최대 12장으로 제한합니다.
+- 메모리는 2GB로 고정입니다. 최대 실행 시간은 300초이며(Fluid compute 기준, Hobby에서 늘릴 수 없음)
+  모든 생성 API 라우트에 `maxDuration = 300`을 설정했습니다.
+- 앱 상한: 이미지 20장, 동영상 3개, 오디오 3개, 문서 5개, 요청당 첨부 총 100MB.
+
+### 채팅 (요청당)
+
+| 계열 | 이미지 | 동영상(직접 입력) | 오디오 | 총 용량 | 근거 |
+|---|---|---|---|---|---|
+| OpenAI GPT | 500 → 앱 20 | 미지원(프레임) | 모델별 | 50MB | developers.openai.com/api/docs/guides/images-vision |
+| Anthropic Claude | 100 (200k 컨텍스트) → 20 | 미지원 | 미지원 | 32MB | platform.claude.com/docs/en/build-with-claude/vision |
+| Google Gemini | 3,000 → 20 | 10 → 3 | 개수 제한 없음(총 9.5시간) → 3 | 인라인 100MB | ai.google.dev/gemini-api/docs/video-understanding, blog.google 2026-01 |
+| Qwen VL / QVQ | 512 → 20 | 64 → 3 | — | — | alibabacloud.com/help/en/model-studio/vision |
+| Meta Llama 4 | 5 (Meta 테스트 기준) | 미지원 | 미지원 | — | llama.com Llama 4 모델 카드 |
+| Mistral / Pixtral | 8 | 미지원 | — | 이미지 1장 10MB | docs.mistral.ai |
+| xAI Grok | 제한 없음 → 20 | 미지원 | 미지원 | 이미지 1장 10MiB | docs.x.ai (image understanding) |
+| 그 외 | 공개 자료 없음 → 앱 기본값 | | | 100MB | |
+
+- 동영상을 직접 받지 못하는 비전 모델은 프레임 방식으로 동영상을 전달합니다. 이때 프레임도 이미지
+  개수에 포함됩니다. 예를 들어 Llama 4는 이미지 한도가 5장이라 동영상은 최대 2개까지만 첨부됩니다.
+- 문서 개수는 어느 개발사도 요청당 개수를 공개하지 않아 앱 상한 5개를 유지합니다.
+
+### 이미지 생성 (참조 이미지 최대 장수)
+
+| 계열 | 최대 | 근거 |
+|---|---|---|
+| OpenAI GPT Image | 16 | OpenAI API Reference, Create image edit |
+| Nano Banana 2 / Pro | 14 | Google Cloud 문서 (Gemini 3.1 Flash Image), DeepMind |
+| FLUX.2 (API) | 8 (Playground에서는 10) | docs.bfl.ai/flux_2/flux2_image_editing |
+| Qwen Image Edit | 3 | Hugging Face Qwen-Image-Edit-2509 |
+| Seedream 4.x | 10 | seed.bytedance.com |
+| Grok Imagine Image | 3 | docs.x.ai (Imagine) |
+| Kling Image Omni | 10 | kling.ai 블로그 |
+
+### 영상 생성
+
+NanoGPT 영상 API는 시작 이미지(`imageUrl`/`imageDataUrl`)를 1장만 받으므로, 앱은 시작 이미지 1장과
+원본 영상 1개(지원 모델)만 보냅니다. 끝 프레임은 오버레이에 등록된 모델에서만 보냅니다.
+아래 공식 한도는 화면에 참고로만 표시합니다.
+- Veo 3.1: 참조 이미지 3장 (ai.google.dev/gemini-api/docs/veo)
+- Wan 2.7 Reference: 이미지 5장, 영상 3개
+- Seedance 2.0: 이미지 9장, 영상 3개, 오디오 3개
+- Kling 3.0 Omni: 이미지 7장 (영상을 함께 보내면 4장)
+- Grok Imagine Video: 참조 이미지 7장
+- Sora 2: 이미지 1장
+
+### 음성(TTS)
+
+입력이 텍스트뿐이므로 이미지·동영상·오디오·문서 모두 0개입니다. 보이스 클로닝용 참조 음성
+업로드는 구현하지 않았습니다.

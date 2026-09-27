@@ -16,6 +16,9 @@ import {
   MAX_DOC_BYTES,
 } from "@/lib/attachments";
 
+// Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
+export const maxDuration = 300;
+
 export async function POST(request: NextRequest) {
   let formData: FormData;
   try {
