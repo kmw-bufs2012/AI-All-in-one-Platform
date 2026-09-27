@@ -1,4 +1,5 @@
 import type { NormalizedModel } from "./models";
+import { findChatLimit, findImageReferenceLimit, findVideoInputLimit } from "./model-attachment-limits";
 
 /*
  * 모델별 첨부 정책. NanoGPT 공식 API 문서(docs.nano-gpt.com, 2026-09 확인)를
@@ -33,14 +34,27 @@ export interface AttachmentSlot {
   max: number;
 }
 
-/* 채팅 요청당 앱 안전 상한. NanoGPT가 모델별 개수를 공개하지 않아 사용합니다. */
-const CHAT_MAX_IMAGES = 10;
-const CHAT_MAX_VIDEOS = 3;
-const CHAT_MAX_AUDIOS = 3;
+/*
+ * 채팅 요청당 앱 상한(Vercel Hobby 기준). 공식 한도가 이보다 크면 이 값을 씁니다.
+ * 파일은 청크 업로드라 4.5MB 본문 한도에 걸리지 않지만, 서버가 첨부를 base64로
+ * 읽어 NanoGPT로 보내므로 함수 메모리(2GB)·실행 시간(300초)을 고려해 둡니다.
+ * 공식 한도가 공개되지 않은 모델도 이 값을 씁니다.
+ */
+const APP_CAP_IMAGES = 20;
+const APP_CAP_VIDEOS = 3;
+const APP_CAP_AUDIOS = 3;
 const CHAT_MAX_DOCS = 5;
+/* 공식 총 용량 한도가 없는 모델에 적용하는 요청당 첨부 총량(앱 상한). */
+const APP_CAP_TOTAL_BYTES = 100 * 1024 * 1024;
 
-/* 비전 전용 모델에 동영상을 보여 줄 때 뽑아 보내는 프레임 수. */
+/* 비전 전용 모델에 동영상을 보여 줄 때 동영상 1개에서 뽑는 프레임 수. */
 const VIDEO_FRAME_COUNT = 6;
+/* /api/chat 본문(4.5MB)에 실리는 프레임 총수 상한. 1024px JPEG(q0.7) ≈ 100~250KB. */
+export const MAX_TOTAL_FRAMES = 12;
+
+function capped(official: number | null | undefined, appCap: number): number {
+  return official === null || official === undefined ? appCap : Math.min(official, appCap);
+}
 
 export interface ChatAttachmentPolicy {
   image: AttachmentSlot;
@@ -55,6 +69,10 @@ export interface ChatAttachmentPolicy {
   pdfAllowed: boolean;
   /** 문서 첨부 input 의 accept 값. */
   docAccept: string;
+  /** 요청당 첨부 총 용량 상한(바이트). */
+  totalBytes: number;
+  /** 공식 한도를 확인한 모델 계열(없으면 null — 앱 기본값 사용). */
+  family: string | null;
   /** 첨부 제약을 사용자에게 한 줄로 알려 주는 문구. */
   note: string | null;
 }
@@ -76,6 +94,8 @@ export function resolveChatAttachmentPolicy(model: NormalizedModel | null): Chat
       frameCount: VIDEO_FRAME_COUNT,
       pdfAllowed: true,
       docAccept: ".pdf,.txt,.md,text/plain,text/markdown,application/pdf",
+      totalBytes: APP_CAP_TOTAL_BYTES,
+      family: null,
       note: null,
     };
   }
@@ -83,25 +103,42 @@ export function resolveChatAttachmentPolicy(model: NormalizedModel | null): Chat
   const nativeVideo = model.videoInput ?? false;
   const audio = model.audioInput ?? false;
   const pdf = model.pdfUpload ?? true;
+  const official = findChatLimit(model.id, model.name);
 
-  // 동영상은 직접 지원하면 그대로, 비전만 되면 프레임을 뽑아 이미지로 보냅니다.
-  const videoAllowed = nativeVideo || vision;
+  // 공식 문서가 해당 입력을 지원하지 않는다고(0) 밝힌 경우에도, 카탈로그가
+  // 지원한다고 표시하면 NanoGPT 쪽 처리를 믿고 앱 상한을 적용합니다.
+  const imageMax = vision ? capped(official?.images || null, APP_CAP_IMAGES) : 0;
+  const nativeVideoMax = nativeVideo ? capped(official?.videos || null, APP_CAP_VIDEOS) : 0;
+  const audioMax = audio ? capped(official?.audios || null, APP_CAP_AUDIOS) : 0;
+
+  // 프레임 방식: 동영상 1개당 최소 2프레임이 이미지 한도 안에 들어가야 합니다.
+  const frameVideoMax = vision ? Math.max(0, Math.min(APP_CAP_VIDEOS, Math.floor(Math.min(imageMax, MAX_TOTAL_FRAMES) / 2))) : 0;
+  const videoMax = nativeVideo ? nativeVideoMax : frameVideoMax;
+  const videoAllowed = videoMax > 0;
+  const totalBytes = Math.min(official?.totalBytes ?? APP_CAP_TOTAL_BYTES, APP_CAP_TOTAL_BYTES);
 
   const notes: string[] = [];
   if (!vision) notes.push("이미지를 인식하지 못하는 모델입니다");
-  if (!nativeVideo && vision) notes.push("동영상은 프레임을 뽑아 이미지로 전달합니다");
+  if (!nativeVideo && vision) notes.push("동영상은 프레임을 뽑아 이미지로 전달하며, 프레임도 이미지 개수에 포함됩니다");
   if (!pdf) notes.push("PDF를 지원하지 않아 텍스트 문서(txt·md)만 첨부할 수 있습니다");
+  notes.push(
+    official
+      ? `${official.family} 공식 한도 기준 · 요청당 총 ${Math.round(totalBytes / 1024 / 1024)}MB`
+      : `공식 개수 한도가 공개되지 않아 앱 기본값 적용 · 요청당 총 ${Math.round(totalBytes / 1024 / 1024)}MB`,
+  );
 
   return {
-    image: { allowed: vision, max: vision ? CHAT_MAX_IMAGES : 0 },
-    video: { allowed: videoAllowed, max: videoAllowed ? (nativeVideo ? CHAT_MAX_VIDEOS : 1) : 0 },
-    audio: { allowed: audio, max: audio ? CHAT_MAX_AUDIOS : 0 },
+    image: { allowed: imageMax > 0, max: imageMax },
+    video: { allowed: videoAllowed, max: videoMax },
+    audio: { allowed: audioMax > 0, max: audioMax },
     doc: { allowed: true, max: CHAT_MAX_DOCS },
     videoNative: nativeVideo,
     frameCount: VIDEO_FRAME_COUNT,
     pdfAllowed: pdf,
     docAccept: pdf ? ".pdf,.txt,.md,text/plain,text/markdown,application/pdf" : ".txt,.md,text/plain,text/markdown",
-    note: notes.length > 0 ? `${notes.join(" · ")}.` : null,
+    totalBytes,
+    family: official?.family ?? null,
+    note: `${notes.join(" · ")}.`,
   };
 }
 
@@ -124,7 +161,14 @@ const DEFAULT_MAX_REFERENCES = 4;
 export function resolveImageAttachmentPolicy(model: NormalizedModel | null): ImageAttachmentPolicy {
   // null(미공개)이면 막지 않고 기본값을 씁니다. 지원하지 않는 모델은 API가
   // input_references 를 무시하거나 오류로 알려 줍니다.
-  const max = model ? (model.maxInputReferences ?? DEFAULT_MAX_REFERENCES) : 0;
+  // 카탈로그 값과 원 개발사 공식 한도가 모두 있으면 작은 값을 씁니다.
+  const official = model ? findImageReferenceLimit(model.id, model.name) : null;
+  const catalogMax = model?.maxInputReferences ?? null;
+  const max = !model
+    ? 0
+    : catalogMax !== null && official
+      ? Math.min(catalogMax, official.max)
+      : catalogMax ?? official?.max ?? DEFAULT_MAX_REFERENCES;
   const formats = model?.referenceFormats?.length ? model.referenceFormats : DEFAULT_REFERENCE_FORMATS;
   return {
     reference: { allowed: max > 0, max },
@@ -137,6 +181,8 @@ export function resolveImageAttachmentPolicy(model: NormalizedModel | null): Ima
 export interface VideoAttachmentPolicy {
   startImage: AttachmentSlot;
   sourceVideo: AttachmentSlot;
+  /** 모델이 공식적으로 받는 입력 한도 안내(앱은 시작 이미지 1장만 전송). */
+  note: string | null;
 }
 
 /*
@@ -147,16 +193,18 @@ export interface VideoAttachmentPolicy {
  */
 export function resolveVideoAttachmentPolicy(model: NormalizedModel | null): VideoAttachmentPolicy {
   if (!model) {
-    return { startImage: { allowed: false, max: 0 }, sourceVideo: { allowed: false, max: 0 } };
+    return { startImage: { allowed: false, max: 0 }, sourceVideo: { allowed: false, max: 0 }, note: null };
   }
   const startAllowed = model.acceptsStartImage ?? true;
-  const sourceAllowed = model.acceptsSourceVideo ?? false;
+  const official = findVideoInputLimit(model.id, model.name);
+  const sourceAllowed = (model.acceptsSourceVideo ?? false) && (official ? official.videos > 0 : true);
+  // NanoGPT 영상 API는 시작 이미지를 imageUrl/imageDataUrl 한 개로 받습니다.
   return {
-    startImage: {
-      allowed: startAllowed,
-      max: startAllowed ? Math.max(1, model.maxInputReferences ?? 1) : 0,
-    },
+    startImage: { allowed: startAllowed, max: startAllowed ? 1 : 0 },
     sourceVideo: { allowed: sourceAllowed, max: sourceAllowed ? 1 : 0 },
+    note: official
+      ? `${official.family} 공식 입력 한도: 참조 이미지 ${official.referenceImages}장${official.videos ? ` · 참조 영상 ${official.videos}개` : ""} (이 앱은 NanoGPT 영상 API 형식에 맞춰 시작 이미지 1장${sourceAllowed ? "·원본 영상 1개" : ""}만 전송)`
+      : null,
   };
 }
 
@@ -164,6 +212,8 @@ export interface AudioAttachmentPolicy {
   image: AttachmentSlot;
   video: AttachmentSlot;
   doc: AttachmentSlot;
+  /** TTS는 텍스트만 입력받으므로 이미지·동영상·문서·오디오 모두 0개입니다
+   *  (보이스 클로닝용 참조 음성 업로드는 NanoGPT 음성 API에 구현하지 않음). */
   /** max_input_size. 카탈로그에 없으면 널리 쓰이는 4096자를 기본으로 씁니다. */
   maxInputLength: number;
 }

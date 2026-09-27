@@ -150,3 +150,137 @@ GPT Image(OpenAI), Grok Imagine, Hunyuan Image, Krea, Imagen(Google) 등 나머�
 1. 실제 `NANOGPT_API_KEY`로 `/v1/video-models?detailed=true`, `/v1/image-models?detailed=true`를 호출해, 위에서 조사한 모델들이 실제로 카탈로그에 어떤 ID로 존재하는지, `supported_parameters`가 이 문서의 조사 결과와 일치하는지 확인.
 2. `docs.nano-gpt.com`, `seed.bytedance.com`, `ai.google.dev` 등 이번 세션에서 접속이 막혔던 1차 문서를, 접속 가능한 환경에서 직접 열람해 근거 수준을 "중간"에서 "높음"으로 올리기.
 3. 이 문서에 없는 나머지 카탈로그 모델(수백 개)에 대한 조사 확장.
+
+## 첨부 개수 한도 (2026-09-27 조사)
+
+`lib/model-attachment-limits.ts`와 `lib/attachment-policy.ts`에 반영했습니다. 앞 절과 마찬가지로
+WebSearch 검색 결과를 근거로 했으며, 원 개발사 문서를 직접 열어 확인하지는 못했습니다.
+적용 규칙: 공식 한도와 앱 상한(Vercel Hobby 기준) 중 작은 값을 씁니다. NanoGPT 카탈로그가 더 작은
+값을 공개하면 카탈로그 값을 우선합니다.
+
+### Vercel Hobby 플랜 제약 (vercel.com/docs/functions/limitations, vercel.com/changelog 2025-06)
+
+- 함수 요청·응답 본문은 최대 4.5MB입니다. 첨부는 3MB 청크로 올리고 `/api/chat`에는 ID만 보냅니다.
+  프레임 방식은 JPEG 프레임이 본문에 실리므로 최대 12장으로 제한합니다.
+- 메모리는 2GB로 고정입니다. 최대 실행 시간은 300초이며(Fluid compute 기준, Hobby에서 늘릴 수 없음)
+  모든 생성 API 라우트에 `maxDuration = 300`을 설정했습니다.
+- 앱 상한: 이미지 20장, 동영상 3개, 오디오 3개, 문서 5개, 요청당 첨부 총 100MB.
+
+### 채팅 (요청당)
+
+| 계열 | 이미지 | 동영상(직접 입력) | 오디오 | 총 용량 | 근거 |
+|---|---|---|---|---|---|
+| OpenAI GPT | 500 → 앱 20 | 미지원(프레임) | 모델별 | 50MB | developers.openai.com/api/docs/guides/images-vision |
+| Anthropic Claude | 100 (200k 컨텍스트) → 20 | 미지원 | 미지원 | 32MB | platform.claude.com/docs/en/build-with-claude/vision |
+| Google Gemini | 3,000 → 20 | 10 → 3 | 개수 제한 없음(총 9.5시간) → 3 | 인라인 100MB | ai.google.dev/gemini-api/docs/video-understanding, blog.google 2026-01 |
+| Qwen VL / QVQ | 512 → 20 | 64 → 3 | — | — | alibabacloud.com/help/en/model-studio/vision |
+| Meta Llama 4 | 5 (Meta 테스트 기준) | 미지원 | 미지원 | — | llama.com Llama 4 모델 카드 |
+| Mistral / Pixtral | 8 | 미지원 | — | 이미지 1장 10MB | docs.mistral.ai |
+| xAI Grok | 제한 없음 → 20 | 미지원 | 미지원 | 이미지 1장 10MiB | docs.x.ai (image understanding) |
+| 그 외 | 공개 자료 없음 → 앱 기본값 | | | 100MB | |
+
+- 동영상을 직접 받지 못하는 비전 모델은 프레임 방식으로 동영상을 전달합니다. 이때 프레임도 이미지
+  개수에 포함됩니다. 예를 들어 Llama 4는 이미지 한도가 5장이라 동영상은 최대 2개까지만 첨부됩니다.
+- 문서 개수는 어느 개발사도 요청당 개수를 공개하지 않아 앱 상한 5개를 유지합니다.
+
+### 이미지 생성 (참조 이미지 최대 장수)
+
+| 계열 | 최대 | 근거 |
+|---|---|---|
+| OpenAI GPT Image | 16 | OpenAI API Reference, Create image edit |
+| Nano Banana 2 / Pro | 14 | Google Cloud 문서 (Gemini 3.1 Flash Image), DeepMind |
+| FLUX.2 (API) | 8 (Playground에서는 10) | docs.bfl.ai/flux_2/flux2_image_editing |
+| Qwen Image Edit | 3 | Hugging Face Qwen-Image-Edit-2509 |
+| Seedream 4.x | 10 | seed.bytedance.com |
+| Grok Imagine Image | 3 | docs.x.ai (Imagine) |
+| Kling Image Omni | 10 | kling.ai 블로그 |
+
+### 영상 생성
+
+NanoGPT 영상 API는 시작 이미지(`imageUrl`/`imageDataUrl`)를 1장만 받으므로, 앱은 시작 이미지 1장과
+원본 영상 1개(지원 모델)만 보냅니다. 끝 프레임은 오버레이에 등록된 모델에서만 보냅니다.
+아래 공식 한도는 화면에 참고로만 표시합니다.
+- Veo 3.1: 참조 이미지 3장 (ai.google.dev/gemini-api/docs/veo)
+- Wan 2.7 Reference: 이미지 5장, 영상 3개
+- Seedance 2.0: 이미지 9장, 영상 3개, 오디오 3개
+- Kling 3.0 Omni: 이미지 7장 (영상을 함께 보내면 4장)
+- Grok Imagine Video: 참조 이미지 7장
+- Sora 2: 이미지 1장
+
+### 음성(TTS)
+
+입력이 텍스트뿐이므로 이미지·동영상·오디오·문서 모두 0개입니다. 보이스 클로닝용 참조 음성
+업로드는 구현하지 않았습니다.
+
+## 중국 LLM/LMM 첨부 한도 (2026-09-27 조사, 2025-09 이후 출시 모델 중심)
+
+`lib/model-attachment-limits.ts`와 `lib/models.ts`(비전 판정 보조 패턴)에 반영했습니다. 많은 개발사가
+요청당 개수 대신 컨텍스트 토큰 한도로만 제한합니다. 그런 모델("개수 미공개")에는 앱 상한(이미지 20장,
+동영상 3개)을 적용합니다. 근거 수준은 WebSearch 스니펫입니다. docs.z.ai, api-docs.deepseek.com,
+platform.kimi.ai는 이 세션에서 직접 접속이 차단(EGRESS_BLOCKED)되어 원문을 열지 못했습니다.
+
+| 계열 (출시) | 입력 | 이미지 | 동영상 | 기타 | 근거 |
+|---|---|---|---|---|---|
+| Qwen 3.5~3.8 Plus/Flash/Max (2026) | 텍스트·이미지·동영상 | 토큰 한도 | 최대 2시간·2GB | | alibabacloud.com/help/en/model-studio/vision |
+| Qwen 3.5-Omni / 3.8-Omni-Flash (2026-09) | +오디오 | 파일 64개/요청 | 64 | 파일당 2GB·2시간 | Model Studio qwen3-8-omni-flash |
+| DeepSeek V4-Flash-Vision-Exp → V4.1-Flash | 텍스트·이미지 | 600 (Exp) | 미지원 | V4 Pro는 텍스트 전용 | api-docs.deepseek.com/guides/vision |
+| Kimi K2.5 (2026-01) / K2.6 / K3 (2026-07) | 텍스트·이미지·동영상 | 개수 제한 없음 | 지원(공식 API) | 본문 100MB | platform.kimi.ai |
+| GLM-4.5V / 4.6V (2025-12) | 텍스트·이미지·동영상 | 10 (장당 50MB) | 지원 | | docs.z.ai |
+| GLM-5V-Turbo / GLM-5.3-Flash (2026) | 텍스트·이미지·동영상·파일 | 컨텍스트 한도 | 지원 | | docs.z.ai |
+| MiniMax M3 (2026-06) | 텍스트·이미지·동영상 | 장당 10MB | 개당 50MB | 본문 64MB, M2.x는 텍스트 전용 | minimax.io/blog/minimax-m3 |
+| ERNIE 5.0 (2026-01) | 텍스트·이미지·오디오·동영상 | 미공개 | 미공개 | 128K 컨텍스트 | ERNIE for Developers 발표 |
+| ERNIE 4.5 VL | 텍스트·이미지·동영상 | 10 | 3 | | FastDeploy 문서 |
+| Doubao Seed 1.6-vision / 2.0 / 2.1 | 텍스트·이미지·동영상 | 미공개 | 미공개 | 256K | docs.byteplus.com |
+| Xiaomi MiMo-V2-Omni | 이미지·동영상·오디오 | 미공개 | 미공개 | | mimo.xiaomi.com |
+| StepFun Step 3 / 3.7 Flash (2026-05) | 텍스트·이미지 | 미공개 | – | | stepfun.ai |
+| Tencent Hunyuan-Large-Vision | 이미지·동영상 | 미공개 | 미공개 | | Tencent Hunyuan 발표 |
+
+텍스트 전용이라 첨부를 받지 않는 모델: DeepSeek V3.2 / V4 Pro, Kimi K2 Thinking, GLM-4.6 / 4.7 / 5,
+MiniMax M2 / M2.1 / M2.5 / M2.7, Hunyuan Hy3 (텍스트 중심).
+
+## 무검열 파생 모델 (2026-09-27 조사)
+
+`lib/model-attachment-limits.ts`의 `findUncensoredFamily`와 `lib/models.ts`의 비전 판정에 반영했습니다.
+무검열 모델은 공개 모델을 파인튜닝하거나 거절 방향을 제거(abliteration, derestriction, heretic)한
+파생 모델입니다. 이미지 입력 지원은 원본 모델을 따릅니다. abliteration은 보통 텍스트 부분만
+수정하고 비전 인코더는 그대로 둡니다(huihui-ai 모델 카드).
+
+판정 우선순위: 카탈로그의 명시적 플래그 → 입력 모달리티 → 무검열 계열 표 → 이름 힌트.
+첨부 개수는 원본 모델의 공식 한도를 적용합니다.
+
+| 계열 | 원본 | 이미지 | 동영상(프레임) | 근거 |
+|---|---|---|---|---|
+| Venice Uncensored (Dolphin Mistral 24B Venice Edition) | Mistral Small 24B 2501 | 불가 | 불가 | venice.ai 블로그, HF dphn |
+| Dolphin 2.x / 3.0 | Mistral·Llama | 불가 | 불가 | HF dphn/Dolphin3.0-Mistral-24B |
+| Nous Hermes 3 / 4 | Llama 3.1 70B/405B | 불가 | 불가 | OpenRouter hermes-4-405b |
+| gpt-oss Derestricted/abliterated | gpt-oss-20b/120b | 불가 | 불가 | HF ArliAI |
+| GLM-4.5-Air Derestricted 등 | GLM-4.5/4.6/4.7 | 불가 | 불가 | HF ArliAI |
+| Qwen2.5 / Qwen3 abliterated·Josiefied | Qwen 텍스트 모델 | 불가 | 불가 | HF huihui-ai |
+| Euryale·Magnum·Cydonia 등 롤플레이 파인튜닝 | Llama 3.x·Mistral | 불가 | 불가 | 각 HF 카드 |
+| Qwen2.5-VL / Qwen3-VL abliterated·Heretic | Qwen VL | 가능(20) | 가능(3) | HF huihui-ai, DreamFast |
+| Qwen 3.5~3.8 Uncensored/Derestricted/Obliterated | Qwen3.5/3.6/3.8 (네이티브 멀티모달) | 가능 | 가능 | HF ArliAI, nano-gpt.com 모델 페이지 |
+| Gemma 3 (4B 이상) / Gemma 4 abliterated·Heretic | Gemma | 가능 | Gemma 4만 직접 입력(약 60초) | ai.google.dev/gemma |
+| Llama 4 Scout abliterated | Llama 4 | 5장 | 2개 | llama.com |
+| Llama 3.2 Vision abliterated | Llama 3.2 11B/90B Vision | 1장 | 불가 | HF mlx-community |
+| Mistral Small 3.1/3.2 무검열 | Mistral Small 3.1+ | 가능(8) | 불가 | docs.mistral.ai |
+| DeepSeek V4 Flash Vision Uncensored | DeepSeek Vision | 가능 | 불가(프레임만) | api-docs.deepseek.com |
+| GLM 5.3 Flash Uncensored, Abliterated Model Large V2 | GLM-5.3-Flash | 제공자별 상이 → 카탈로그 값 | | nano-gpt.com, x.com/NanoGPTcom |
+
+한계:
+- nano-gpt.com은 이 세션에서 직접 접속이 차단되어, NanoGPT의 실제 무검열 모델 전체 목록은 확인하지 못했습니다.
+- 위 계열은 검색으로 확인되는 대표 모델입니다. 배포 환경에서 `/api/models?type=text&debug=1`로
+  실제 ID를 확인해 보완하는 것이 좋습니다.
+
+## Seedance 2.0 Mini 마스터 프롬프트 (2026-09-27 조사)
+
+프롬프트 페이지의 "동영상 → Seedance 2.0 Mini 마스터 프롬프트" 기능(`components/VideoMasterPrompt.tsx`,
+`lib/master-prompt.ts`)에서 쓰는 작성 원칙입니다.
+- 샷 수, 총 길이, 화면비를 프롬프트 맨 위에 적습니다.
+- 주체를 먼저 쓰고 구체적인 카메라 용어를 씁니다.
+- 소리(대사, 효과음, 음악)를 프롬프트에 직접 적습니다.
+- 부정문 대신 긍정문으로 씁니다.
+- 해상도, 길이, 화면비 값은 생성 화면 설정으로 지정합니다.
+- 한 번 생성할 때 최대 15초이며, Mini는 속도와 대량 생성용 경량 버전입니다.
+
+근거: fal.ai Seedance 2.0 Prompting Guide, higgsfield.ai Seedance prompting guide, apiyi.com 공식 가이드 해설.
+Mini 전용 공식 프롬프트 문서는 찾지 못해 Seedance 2.0 공통 원칙을 적용했습니다.

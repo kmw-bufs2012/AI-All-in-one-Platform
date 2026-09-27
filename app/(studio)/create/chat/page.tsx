@@ -23,7 +23,7 @@ import {
   uploadFiles,
   type AttachedFile,
 } from "@/lib/client-api";
-import { resolveChatAttachmentPolicy } from "@/lib/attachment-policy";
+import { resolveChatAttachmentPolicy, MAX_TOTAL_FRAMES } from "@/lib/attachment-policy";
 import { computeChatCost, estimateImageTokens, estimateTokens, formatCost, formatUsage } from "@/lib/cost";
 
 interface ChatMessage {
@@ -75,6 +75,17 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 요청당 첨부 총 용량(공식 한도 또는 앱 상한). 동영상은 압축 후 크기로 판정합니다.
+  function fitsTotal(uploaded: AttachedFile[]): boolean {
+    const current = attachments.reduce((sum, item) => sum + (item.size || 0), 0);
+    const added = uploaded.reduce((sum, item) => sum + (item.size || 0), 0);
+    if (current + added > policy.totalBytes) {
+      setError(`이 모델은 요청당 첨부 총 용량이 ${Math.round(policy.totalBytes / 1024 / 1024)}MB로 제한됩니다.`);
+      return false;
+    }
+    return true;
+  }
+
   async function pickImages(event: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
@@ -85,12 +96,15 @@ export default function ChatPage() {
       return;
     }
     const images = attachments.filter((item) => item.kind === "image");
-    if (images.length + files.length > policy.image.max) {
+    // 프레임 방식 동영상은 이미지 한도를 함께 씁니다(동영상 1개당 최소 2프레임).
+    const frameReserve = policy.videoNative ? 0 : attachments.filter((item) => item.kind === "video").length * 2;
+    if (images.length + files.length + frameReserve > policy.image.max) {
       setError(`이 모델은 이미지를 최대 ${policy.image.max}개까지 첨부할 수 있습니다.`);
       return;
     }
     try {
       const uploaded = await uploadFiles(files);
+      if (!fitsTotal(uploaded)) return;
       setAttachments((prev) => [...prev, ...uploaded]);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "이미지 업로드에 실패했습니다.");
@@ -120,6 +134,7 @@ export default function ChatPage() {
     try {
       setCompressingVideo(files.some(needsVideoCompression));
       const uploaded = await uploadFiles(files);
+      if (!fitsTotal(uploaded)) return;
       setAttachments((prev) => [...prev, ...uploaded]);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "동영상 업로드에 실패했습니다.");
@@ -158,6 +173,7 @@ export default function ChatPage() {
     }
     try {
       const uploaded = await uploadFiles(files);
+      if (!fitsTotal(uploaded)) return;
       setAttachments((prev) => [...prev, ...uploaded]);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "오디오 업로드에 실패했습니다.");
@@ -185,6 +201,7 @@ export default function ChatPage() {
     }
     try {
       const uploaded = await uploadFiles(files);
+      if (!fitsTotal(uploaded)) return;
       setAttachments((prev) => [...prev, ...uploaded]);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "문서 업로드에 실패했습니다.");
@@ -207,21 +224,37 @@ export default function ChatPage() {
     const videoNative = policy.videoNative;
     let frames: string[] = [];
     let framesCount = 0;
+    const frameGroups: { name: string; count: number }[] = [];
     // 동영상을 직접 지원하는 모델(capabilities.video_input)은 video_url 파트로
-    // 그대로 전송합니다. 비전 전용 모델은 프레임을 뽑아 이미지로 보냅니다.
+    // 그대로 전송합니다. 비전 전용 모델은 첨부한 모든 동영상에서 프레임을 뽑아
+    // 이미지로 보냅니다. 추출에 실패하면 조용히 넘어가지 않고 알려 줍니다.
     if (!videoNative && hasVision) {
-      const videoAtt = snapshot.find((item) => item.kind === "video");
-      if (videoAtt) {
+      const videoAtts = snapshot.filter((item) => item.kind === "video");
+      // 프레임은 이미지 한도에서 이미 첨부한 이미지를 뺀 만큼, 최대 MAX_TOTAL_FRAMES 장까지.
+      const imageCount = snapshot.filter((item) => item.kind === "image").length;
+      const frameBudget = Math.min(MAX_TOTAL_FRAMES, policy.image.max - imageCount);
+      const perVideo = Math.max(1, Math.floor(frameBudget / Math.max(1, videoAtts.length)));
+      for (const videoAtt of videoAtts) {
         try {
-          const blob = await fetch(videoAtt.url).then((response) => response.blob());
-          const videoFile = new File([blob], videoAtt.name, { type: videoAtt.mime });
-          frames = await extractVideoFrames(videoFile, policy.frameCount);
-          framesCount = frames.length;
-        } catch {
-          frames = [];
-          framesCount = 0;
+          const blob = await fetch(videoAtt.url).then((response) => {
+            if (!response.ok) throw new Error("동영상 파일을 불러오지 못했습니다.");
+            return response.blob();
+          });
+          const videoFile = new File([blob], videoAtt.name, { type: videoAtt.mime || blob.type });
+          const extracted = await extractVideoFrames(videoFile, Math.min(policy.frameCount, perVideo));
+          frames.push(...extracted);
+          frameGroups.push({ name: videoAtt.name, count: extracted.length });
+        } catch (frameError) {
+          setError(
+            `동영상 «${videoAtt.name}»에서 프레임을 뽑지 못했습니다: ${
+              frameError instanceof Error ? frameError.message : "알 수 없는 오류"
+            }`,
+          );
+          setSending(false);
+          return;
         }
       }
+      framesCount = frames.length;
     }
 
     const history = messages.map((message) => ({ role: message.role, content: message.content }));
@@ -260,6 +293,7 @@ export default function ChatPage() {
               : undefined,
           },
           frames,
+          frameGroups,
           pdfAllowed: policy.pdfAllowed,
         }),
       });

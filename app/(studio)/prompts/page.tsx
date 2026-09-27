@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icon } from "@/components/Icon";
+import { VideoMasterPrompt } from "@/components/VideoMasterPrompt";
 
 interface PromptItem {
   id: number;
@@ -61,6 +62,24 @@ export default function PromptsPage() {
     }
   }
 
+  async function saveGenerated(promptName: string, promptContent: string) {
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/prompts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: promptName, content: promptContent }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "프롬프트 저장에 실패했습니다.");
+      setNotice("마스터 프롬프트를 저장했습니다.");
+      await loadPrompts();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "프롬프트 저장에 실패했습니다.");
+    }
+  }
+
   async function handleDelete(id: number) {
     setDeletingId(id);
     setError("");
@@ -84,6 +103,8 @@ export default function PromptsPage() {
         <h1>프롬프트</h1>
         <p>자주 쓰는 문장을 저장해 두고 채팅 입력창으로 바로 불러옵니다.</p>
       </div>
+
+      <VideoMasterPrompt onSave={saveGenerated} />
 
       <div className="two-col">
         <div className="panel">

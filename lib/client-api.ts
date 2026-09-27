@@ -226,34 +226,81 @@ export async function uploadFiles(
 }
 
 /** 시각 모델에 동영상을 넘기기 위해 균등 간격으로 프레임을 뽑습니다. */
+/*
+ * 비전 전용 모델에 보낼 동영상 프레임을 뽑습니다.
+ * - loadeddata 까지 기다려야 첫 seek 후 drawImage 가 빈 캔버스를 그리지 않습니다.
+ * - webm 등은 duration 이 Infinity 로 오므로 끝까지 seek 해 실제 길이를 구합니다.
+ * - seeked 가 오지 않는 브라우저·코덱이 있어 seek 마다 타임아웃을 둡니다.
+ */
+function waitEvent(video: HTMLVideoElement, event: string, timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("동영상 프레임을 읽는 데 시간이 너무 오래 걸립니다."));
+    }, timeoutMs);
+    const onEvent = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("이 브라우저에서 재생할 수 없는 동영상 형식입니다."));
+    };
+    function cleanup() {
+      clearTimeout(timer);
+      video.removeEventListener(event, onEvent);
+      video.removeEventListener("error", onError);
+    }
+    video.addEventListener(event, onEvent);
+    video.addEventListener("error", onError);
+  });
+}
+
 export async function extractVideoFrames(file: File, count = 6): Promise<string[]> {
   const objectUrl = URL.createObjectURL(file);
+  const video = document.createElement("video");
   try {
-    const video = document.createElement("video");
-    video.src = objectUrl;
     video.muted = true;
     video.playsInline = true;
-    await new Promise<void>((resolve, reject) => {
-      video.onloadedmetadata = () => resolve();
-      video.onerror = () => reject(new Error("동영상을 읽을 수 없습니다."));
-    });
-    const duration = video.duration || 1;
+    video.preload = "auto";
+    const loaded = waitEvent(video, "loadeddata", 20000);
+    video.src = objectUrl;
+    video.load();
+    await loaded;
+
+    let duration = video.duration;
+    if (!Number.isFinite(duration) || duration <= 0) {
+      const seeked = waitEvent(video, "seeked", 10000);
+      video.currentTime = 1e9;
+      await seeked.catch(() => {});
+      duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : video.currentTime || 1;
+    }
+
     const frames: string[] = [];
     for (let i = 0; i < count; i++) {
-      video.currentTime = (duration * (i + 0.5)) / count;
-      await new Promise<void>((resolve) => {
-        video.onseeked = () => resolve();
-      });
-      const scale = Math.min(1, 1024 / Math.max(video.videoWidth || 1, video.videoHeight || 1));
+      const target = Math.min(duration - 0.05, (duration * (i + 0.5)) / count);
+      const seeked = waitEvent(video, "seeked", 10000);
+      video.currentTime = Math.max(0, target);
+      try {
+        await seeked;
+      } catch {
+        continue;
+      }
+      if (!video.videoWidth || !video.videoHeight) continue;
+      const scale = Math.min(1, 1024 / Math.max(video.videoWidth, video.videoHeight));
       const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round((video.videoWidth || 1) * scale));
-      canvas.height = Math.max(1, Math.round((video.videoHeight || 1) * scale));
+      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
       const context = canvas.getContext("2d");
-      if (context) context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      if (!context) continue;
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
       frames.push(canvas.toDataURL("image/jpeg", 0.7));
     }
+    if (frames.length === 0) throw new Error("동영상에서 프레임을 추출하지 못했습니다.");
     return frames;
   } finally {
+    video.removeAttribute("src");
+    video.load();
     URL.revokeObjectURL(objectUrl);
   }
 }

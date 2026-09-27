@@ -16,7 +16,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
  * - MAX_DOC_BYTES / MAX_IMAGE_BYTES / MAX_VIDEO_BYTES — 업로드 단계에서
  *   지나치게 큰 파일을 미리 걸러 내기 위한 앱 상한입니다.
  */
-export const MAX_IMAGES = 10;
+export const MAX_IMAGES = 20; // lib/attachment-policy.ts APP_CAP_IMAGES 와 같아야 합니다.
 export const MAX_VIDEO_FILES = 3;
 export const MAX_AUDIO_FILES = 3;
 export const MAX_REFERENCE_BYTES = 30 * 1024 * 1024;

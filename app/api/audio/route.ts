@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateSpeech, politeNanoGptError, readJson } from "@/lib/nanogpt";
 import { saveGeneratedFile } from "@/lib/storage";
 
+// Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
+export const maxDuration = 300;
+
 /*
  * NanoGPT 동기 TTS(POST /api/v1/speech).
  * 본문: model, input, voice, format(mp3·wav·ogg·opus·aac·flac·pcm16), speed, language.

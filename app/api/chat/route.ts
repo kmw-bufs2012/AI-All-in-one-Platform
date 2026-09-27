@@ -11,6 +11,9 @@ import {
   MAX_DOCS,
 } from "@/lib/attachments";
 
+// Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
+export const maxDuration = 300;
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /* 텍스트 문서는 파일 파트 대신 본문에 그대로 붙여 넣습니다. PDF만 파일 파트로
@@ -66,6 +69,7 @@ export async function POST(request: NextRequest) {
     messages?: unknown;
     attachments?: { images?: unknown; docs?: unknown; videos?: unknown; audios?: unknown };
     frames?: unknown;
+    frameGroups?: unknown;
     pdfAllowed?: unknown;
   };
   try {
@@ -129,8 +133,28 @@ export async function POST(request: NextRequest) {
       input_audio: { data: buffer.toString("base64"), format: audioFormat(file.mime) },
     });
   }
-  for (const frame of frames) {
-    parts.push({ type: "image_url", image_url: { url: frame } });
+  if (frames.length > 0) {
+    // 설명 없이 이미지만 보내면 모델이 "동영상이 없다"고 답하므로, 이 이미지들이
+    // 첨부 동영상에서 시간 순으로 뽑은 프레임이라는 사실을 함께 알려 줍니다.
+    const groups = Array.isArray(body.frameGroups)
+      ? (body.frameGroups as unknown[])
+          .map((group) => group as { name?: unknown; count?: unknown })
+          .filter((group) => typeof group.name === "string" && typeof group.count === "number")
+          .map((group) => ({ name: String(group.name), count: Number(group.count) }))
+      : [];
+    const described = groups.length > 0 ? groups : [{ name: "첨부 동영상", count: frames.length }];
+    let offset = 0;
+    for (const group of described) {
+      const slice = frames.slice(offset, offset + group.count);
+      offset += group.count;
+      if (slice.length === 0) continue;
+      parts.push({
+        type: "text",
+        text: `[사용자가 동영상 «${group.name}»을(를) 첨부했습니다. 아래 ${slice.length}장의 이미지는 이 동영상의 처음부터 끝까지 시간 순으로 고르게 뽑은 프레임입니다. 이 프레임들을 동영상으로 보고 내용을 파악해 답해 주세요.]`,
+      });
+      for (const frame of slice) parts.push({ type: "image_url", image_url: { url: frame } });
+    }
+    for (const frame of frames.slice(offset)) parts.push({ type: "image_url", image_url: { url: frame } });
   }
   for (const id of docIds) {
     const file = await resolveAttachmentFile(id);

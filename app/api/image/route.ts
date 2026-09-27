@@ -6,6 +6,9 @@ import { extractImages, extractCost } from "@/lib/extract";
 import { dataUrlToBuffer, saveGeneratedFile } from "@/lib/storage";
 import { resolveUploadPath, mimeFromPath, MAX_REFERENCE_BYTES } from "@/lib/attachments";
 
+// Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
+export const maxDuration = 300;
+
 /*
  * NanoGPT Image API (POST /api/v1/images).
  * 참조 이미지는 input_references 배열로 보냅니다. 공식 문서에 따르면

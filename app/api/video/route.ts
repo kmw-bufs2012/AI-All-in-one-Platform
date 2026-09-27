@@ -6,6 +6,9 @@ import { extractRunId, extractStatus, extractCost } from "@/lib/extract";
 import { resolveUploadPath, mimeFromPath } from "@/lib/attachments";
 import { findVideoOverlay } from "@/lib/model-capability-overlay";
 
+// Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
+export const maxDuration = 300;
+
 /*
  * NanoGPT 영상 생성(POST /api/generate-video)은 비동기입니다. 요청은 즉시
  * runId 와 status: "pending" 을 돌려주고, 결과는 /api/video/status 로 폴링합니다.

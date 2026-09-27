@@ -11,6 +11,9 @@ import {
   MAX_DOC_BYTES,
 } from "@/lib/attachments";
 
+// Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
+export const maxDuration = 300;
+
 /*
  * 청크 업로드. Vercel Serverless Function은 요청 본문을 4.5MB로 강제 제한합니다
  * (인프라 레벨이라 next.config.ts의 middlewareClientMaxBodySize로는 우회할 수

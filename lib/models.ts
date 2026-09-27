@@ -1,4 +1,5 @@
 import { modelDescription } from "./model-descriptions";
+import { findUncensoredFamily } from "./model-attachment-limits";
 import {
   findVideoOverlay,
   applyDurationOverlay,
@@ -484,23 +485,32 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
    * 채팅 첨부 능력. 명시적 플래그 → 모달리티 목록 → 이름·설명 순으로 보고,
    * 어느 근거도 없으면 null(모름)로 둡니다.
    */
-  function resolveInput(names: string[], modality: string, hint: RegExp): boolean | null {
+  // 무검열 파생 모델은 이름 힌트보다 원본 모델의 비전 지원 여부를 우선합니다.
+  const uncensoredFamily = findUncensoredFamily(haystack);
+
+  function resolveInput(names: string[], modality: string, hint: RegExp, familyValue: boolean | null = null): boolean | null {
     const flag = lookupFlag(raw, names);
     if (flag !== null) return flag;
     if (inputModalities.includes(modality)) return true;
-    if (mentions(haystack, hint)) return true;
+    if (familyValue !== null) return familyValue;
+    // 무검열 계열이 "제공자별로 다름"(vision: null)이면 이름만 보고 비전으로 단정하지 않습니다.
+    const providerDependent = modality === "image" && uncensoredFamily !== null && uncensoredFamily.vision === null;
+    if (!providerDependent && mentions(haystack, hint)) return true;
     return inputModalities.length > 0 ? false : null;
   }
 
   const vision = resolveInput(
     ["vision", "supportsVision", "supports_vision", "image_input", "imageInput", "visionEnabled", "multimodal"],
     "image",
-    /\bvision\b|\bvl\b|multimodal/,
+    // 원 개발사가 이미지 입력을 공식 지원한다고 밝힌 중국 모델 계열도 포함합니다
+    // (lib/model-attachment-limits.ts 참고). 텍스트 전용 계열은 넣지 않습니다.
+    /\bvision\b|\bvl\b|multimodal|qvq|qwen[\d.]*-?omni|qwen3\.[5-9].*(plus|flash|max)|glm-?\d(\.\d)?v\b|glm-?5\.\d-?flash|kimi-?k2[.-]?[5-9]|kimi-?k3|minimax-?m3|ernie-?5|mimo-?v2.*omni|step-?3|seed-?(1\.6-vision|2\.\d)/,
+    uncensoredFamily?.vision ?? null,
   );
   const videoInput = resolveInput(
     ["video_input", "videoInput", "supportsVideoInput", "supportsVideo", "supports_video"],
     "video",
-    /video[- ]?input/,
+    /video[- ]?(input|understanding)|\bvideo\b.{0,20}\b(input|understand)/,
   );
   const audioInput = resolveInput(
     ["audio_input", "audioInput", "supportsAudioInput", "supportsAudio", "supports_audio"],
@@ -660,7 +670,8 @@ export function modelDisplayLabel(model: NormalizedModel): string {
   const badges: string[] = [];
   if (model.kind === "text") {
     if (model.vision) badges.push("비전");
-    if (model.videoInput) badges.push("영상");
+    // 무검열 비전 모델 중 동영상을 인식하는 모델은 "동영상"을 따로 표시합니다.
+    if (model.videoInput) badges.push("동영상");
     if (model.audioInput) badges.push("오디오");
     if (model.pdfUpload) badges.push("PDF");
   } else if (model.kind === "image") {
