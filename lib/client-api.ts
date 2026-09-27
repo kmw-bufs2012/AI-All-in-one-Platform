@@ -256,6 +256,78 @@ function waitEvent(video: HTMLVideoElement, event: string, timeoutMs: number): P
   });
 }
 
+function drawFrame(video: HTMLVideoElement): string | null {
+  if (!video.videoWidth || !video.videoHeight) return null;
+  const scale = Math.min(1, 1024 / Math.max(video.videoWidth, video.videoHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.7);
+}
+
+/** seek 로 원하는 시점을 찍습니다. 길이 정보·탐색 색인이 있는 파일(mp4 등)에 적합합니다. */
+async function framesBySeeking(video: HTMLVideoElement, count: number): Promise<string[]> {
+  let duration = video.duration;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    // MediaRecorder 로 만든 WebM 은 길이가 Infinity 로 옵니다. 끝으로 보내 실제 길이를 구합니다.
+    const seeked = waitEvent(video, "seeked", 10000);
+    video.currentTime = 1e9;
+    await seeked.catch(() => {});
+    duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : video.currentTime;
+  }
+  if (!Number.isFinite(duration) || duration <= 0) return [];
+  const frames: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const target = Math.max(0, Math.min(duration - 0.05, (duration * (i + 0.5)) / count));
+    const seeked = waitEvent(video, "seeked", 8000);
+    video.currentTime = target;
+    try {
+      await seeked;
+    } catch {
+      continue;
+    }
+    const frame = drawFrame(video);
+    if (frame) frames.push(frame);
+  }
+  return frames;
+}
+
+/*
+ * 재생하면서 찍습니다. 탐색 색인이 없는 WebM 처럼 seek 가 실패하는 파일용
+ * 대체 방식입니다. 소리 없이 빠르게 재생하며 일정 간격으로 찍은 뒤, 끝나면
+ * 고르게 count 장을 고릅니다.
+ */
+async function framesByPlayback(video: HTMLVideoElement, count: number): Promise<string[]> {
+  const seeked = waitEvent(video, "seeked", 5000);
+  video.currentTime = 0;
+  await seeked.catch(() => {});
+  video.playbackRate = 4;
+  const captured: string[] = [];
+  let lastCapture = -Infinity;
+  const interval = 0.5;
+  const capture = () => {
+    if (video.currentTime - lastCapture >= interval) {
+      const frame = drawFrame(video);
+      if (frame) captured.push(frame);
+      lastCapture = video.currentTime;
+    }
+  };
+  video.addEventListener("timeupdate", capture);
+  try {
+    const ended = waitEvent(video, "ended", 120000);
+    await video.play();
+    await ended;
+  } finally {
+    video.removeEventListener("timeupdate", capture);
+    video.pause();
+  }
+  if (captured.length <= count) return captured;
+  return Array.from({ length: count }, (_, i) => captured[Math.floor(((i + 0.5) * captured.length) / count)]);
+}
+
 export async function extractVideoFrames(file: File, count = 6): Promise<string[]> {
   const objectUrl = URL.createObjectURL(file);
   const video = document.createElement("video");
@@ -268,33 +340,10 @@ export async function extractVideoFrames(file: File, count = 6): Promise<string[
     video.load();
     await loaded;
 
-    let duration = video.duration;
-    if (!Number.isFinite(duration) || duration <= 0) {
-      const seeked = waitEvent(video, "seeked", 10000);
-      video.currentTime = 1e9;
-      await seeked.catch(() => {});
-      duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : video.currentTime || 1;
-    }
-
-    const frames: string[] = [];
-    for (let i = 0; i < count; i++) {
-      const target = Math.min(duration - 0.05, (duration * (i + 0.5)) / count);
-      const seeked = waitEvent(video, "seeked", 10000);
-      video.currentTime = Math.max(0, target);
-      try {
-        await seeked;
-      } catch {
-        continue;
-      }
-      if (!video.videoWidth || !video.videoHeight) continue;
-      const scale = Math.min(1, 1024 / Math.max(video.videoWidth, video.videoHeight));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-      const context = canvas.getContext("2d");
-      if (!context) continue;
-      context.drawImage(video, 0, 0, canvas.width, canvas.height);
-      frames.push(canvas.toDataURL("image/jpeg", 0.7));
+    let frames = await framesBySeeking(video, count).catch(() => [] as string[]);
+    if (frames.length < Math.ceil(count / 2)) {
+      const played = await framesByPlayback(video, count).catch(() => [] as string[]);
+      if (played.length > frames.length) frames = played;
     }
     if (frames.length === 0) throw new Error("동영상에서 프레임을 추출하지 못했습니다.");
     return frames;
