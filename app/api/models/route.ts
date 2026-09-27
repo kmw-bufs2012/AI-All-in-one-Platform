@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchNanoGptModels, NanoGptError, type CatalogType } from "@/lib/nanogpt";
 import { normalizeModel } from "@/lib/models";
 
+/*
+ * 모델 목록은 요청마다 NanoGPT /v1/*models?detailed=true 를 새로 조회합니다(캐시 없음).
+ * 빌드 시점 정적 생성이나 fetch 캐시가 끼지 않도록 동적 라우트로 고정합니다.
+ */
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 const ALLOWED_TYPES = new Set<CatalogType>(["text", "image", "video", "tts"]);
 
 function isCatalogType(value: string): value is CatalogType {
@@ -29,7 +36,7 @@ export async function GET(request: NextRequest) {
       });
     }
     const models = rawModels.map((raw) => normalizeModel(raw, type)).filter((model) => model.id);
-    return NextResponse.json({ source: "live", type, models });
+    return NextResponse.json({ source: "live", fetchedAt: new Date().toISOString(), type, models });
   } catch (error) {
     const message = error instanceof NanoGptError ? error.message : "NanoGPT 모델 목록을 불러오지 못했습니다.";
     const status = error instanceof NanoGptError ? error.status : 502;

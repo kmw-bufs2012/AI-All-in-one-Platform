@@ -125,7 +125,7 @@ function collectModelArray(body: unknown): unknown[] | null {
 }
 
 export async function fetchNanoGptModels(type: CatalogType): Promise<unknown[]> {
-  const response = await nanoFetch(CATALOG_PATHS[type], {}, 30000);
+  const response = await nanoFetch(CATALOG_PATHS[type], { cache: "no-store" }, 30000);
   const body = await readJson(response);
   if (!response.ok) {
     throw politeNanoGptError(response, body, "NanoGPT 모델 목록을 불러오지 못했습니다.");

@@ -495,7 +495,9 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const vision = resolveInput(
     ["vision", "supportsVision", "supports_vision", "image_input", "imageInput", "visionEnabled", "multimodal"],
     "image",
-    /\bvision\b|\bvl\b|multimodal/,
+    // 원 개발사가 이미지 입력을 공식 지원한다고 밝힌 중국 모델 계열도 포함합니다
+    // (lib/model-attachment-limits.ts 참고). 텍스트 전용 계열은 넣지 않습니다.
+    /\bvision\b|\bvl\b|multimodal|qvq|qwen[\d.]*-?omni|qwen3\.[5-9].*(plus|flash|max)|glm-?\d(\.\d)?v\b|glm-?5\.\d-?flash|kimi-?k2[.-]?[5-9]|kimi-?k3|minimax-?m3|ernie-?5|mimo-?v2.*omni|step-?3|seed-?(1\.6-vision|2\.\d)/,
   );
   const videoInput = resolveInput(
     ["video_input", "videoInput", "supportsVideoInput", "supportsVideo", "supports_video"],

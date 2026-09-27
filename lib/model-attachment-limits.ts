@@ -44,6 +44,69 @@ const CHAT_LIMITS: Array<{ pattern: RegExp; limit: ChatLimit }> = [
     pattern: /gemini|gemma-?3n/i,
     limit: { family: "Google Gemini", images: 3000, videos: 10, audios: null, totalBytes: 100 * MB, imageBytes: null, source: "ai.google.dev/gemini-api/docs/video-understanding, blog.google (2026-01 inline 100MB)" },
   },
+  /*
+   * ---- 중국 LLM/LMM (2026-09-27 조사, 2025-09 이후 출시 모델 중심) ----
+   * images/videos 가 null 이면 개발사가 개수 한도를 따로 두지 않고 컨텍스트
+   * 토큰 한도로만 제한한다는 뜻입니다. 이때는 앱 상한(이미지 20·동영상 3)을 씁니다.
+   * 텍스트 전용 모델(DeepSeek V4 Pro, MiniMax M2.x, Kimi K2 Thinking, GLM-4.6/4.7/5 등)은
+   * 여기 넣지 않습니다. 카탈로그가 비전 미지원으로 표시하므로 첨부가 막힙니다.
+   */
+  {
+    pattern: /qwen[\d.]*-?omni/i,
+    limit: { family: "Qwen Omni (3.5/3.8)", images: 64, videos: 64, audios: 64, totalBytes: null, imageBytes: null, source: "Alibaba Model Studio qwen3.8-omni-flash (요청당 파일 64개, 파일당 2GB·2시간)" },
+  },
+  {
+    pattern: /qwen3\.[5-9].*(plus|flash|max)|qwen3-?max/i,
+    limit: { family: "Qwen 3.5~3.8 (네이티브 멀티모달)", images: null, videos: null, audios: 0, totalBytes: null, imageBytes: null, source: "alibabacloud.com/help/en/model-studio/vision (이미지 수는 토큰 한도로 제한, 동영상 최대 2시간·2GB)" },
+  },
+  {
+    pattern: /deepseek.*(vision|vl)/i,
+    limit: { family: "DeepSeek V4 Flash Vision", images: 600, videos: 0, audios: 0, totalBytes: null, imageBytes: null, source: "api-docs.deepseek.com/guides/vision (요청당 600장, 동영상 미지원)" },
+  },
+  {
+    pattern: /deepseek-?v4\.1-?flash|deepseek-flash/i,
+    limit: { family: "DeepSeek V4.1 Flash", images: null, videos: 0, audios: 0, totalBytes: null, imageBytes: null, source: "api-docs.deepseek.com/guides/vision (이미지 입력, 동영상 미지원)" },
+  },
+  {
+    pattern: /kimi-?k3|kimi-?k2[.-]?[5-9]|moonshot.*k(3|2[.-]?[5-9])/i,
+    limit: { family: "Moonshot Kimi K2.5/K2.6/K3", images: null, videos: null, audios: 0, totalBytes: 100 * MB, imageBytes: null, source: "platform.kimi.ai/docs/guide/kimi-k2-6-quickstart, use-kimi-vision-model (이미지 개수 제한 없음, 본문 100MB)" },
+  },
+  {
+    pattern: /glm-?4\.[1-6]v/i,
+    limit: { family: "Zhipu GLM-4.5V/4.6V", images: 10, videos: null, audios: 0, totalBytes: null, imageBytes: 50 * MB, source: "docs.z.ai (요청당 이미지 10장·장당 50MB)" },
+  },
+  {
+    pattern: /glm-?5v|glm-?5\.\d-?flash/i,
+    limit: { family: "Zhipu GLM-5V-Turbo / GLM-5.3-Flash", images: null, videos: null, audios: 0, totalBytes: null, imageBytes: null, source: "docs.z.ai/guides/vlm/glm-5v-turbo, glm-5.3-flash (개수는 컨텍스트 한도로 제한)" },
+  },
+  {
+    pattern: /minimax-?m3/i,
+    limit: { family: "MiniMax M3", images: null, videos: null, audios: 0, totalBytes: 64 * MB, imageBytes: 10 * MB, source: "minimax.io/blog/minimax-m3, platform.minimax.io (이미지 10MB·동영상 50MB·본문 64MB)" },
+  },
+  {
+    pattern: /ernie-?5/i,
+    limit: { family: "Baidu ERNIE 5", images: null, videos: null, audios: null, totalBytes: null, imageBytes: null, source: "ERNIE for Developers 공식 발표 (텍스트·이미지·오디오·동영상 입력, 개수 미공개)" },
+  },
+  {
+    pattern: /ernie.*vl/i,
+    limit: { family: "Baidu ERNIE 4.5 VL", images: 10, videos: 3, audios: 0, totalBytes: null, imageBytes: null, source: "paddlepaddle.github.io/FastDeploy (프롬프트당 이미지 10·동영상 3)" },
+  },
+  {
+    pattern: /doubao|seed-?(1\.6|2\.\d)/i,
+    limit: { family: "ByteDance Doubao Seed", images: null, videos: null, audios: 0, totalBytes: null, imageBytes: null, source: "docs.byteplus.com Doubao-Seed-2.0 (이미지·동영상 입력, 개수 미공개)" },
+  },
+  {
+    pattern: /mimo-?v2.*omni/i,
+    limit: { family: "Xiaomi MiMo-V2-Omni", images: null, videos: null, audios: null, totalBytes: null, imageBytes: null, source: "mimo.xiaomi.com/mimo-v2-omni (이미지·동영상·오디오 입력, 개수 미공개)" },
+  },
+  {
+    pattern: /step-?3/i,
+    limit: { family: "StepFun Step 3 / 3.7 Flash", images: null, videos: 0, audios: 0, totalBytes: null, imageBytes: null, source: "stepfun.ai/research/en/step3 (이미지 입력, 개수 미공개)" },
+  },
+  {
+    pattern: /hunyuan.*vision/i,
+    limit: { family: "Tencent Hunyuan Vision", images: null, videos: null, audios: 0, totalBytes: null, imageBytes: null, source: "Tencent Hunyuan 공식 발표 (이미지·동영상 입력, 개수 미공개)" },
+  },
   {
     pattern: /llama-?4|maverick|scout/i,
     limit: { family: "Meta Llama 4", images: 5, videos: 0, audios: 0, totalBytes: null, imageBytes: null, source: "llama.com/docs/model-cards-and-prompt-formats/llama4" },

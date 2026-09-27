@@ -211,3 +211,29 @@ NanoGPT 영상 API는 시작 이미지(`imageUrl`/`imageDataUrl`)를 1장만 받
 
 입력이 텍스트뿐이므로 이미지·동영상·오디오·문서 모두 0개입니다. 보이스 클로닝용 참조 음성
 업로드는 구현하지 않았습니다.
+
+## 중국 LLM/LMM 첨부 한도 (2026-09-27 조사, 2025-09 이후 출시 모델 중심)
+
+`lib/model-attachment-limits.ts`와 `lib/models.ts`(비전 판정 보조 패턴)에 반영했습니다. 많은 개발사가
+요청당 개수 대신 컨텍스트 토큰 한도로만 제한합니다. 그런 모델("개수 미공개")에는 앱 상한(이미지 20장,
+동영상 3개)을 적용합니다. 근거 수준은 WebSearch 스니펫입니다. docs.z.ai, api-docs.deepseek.com,
+platform.kimi.ai는 이 세션에서 직접 접속이 차단(EGRESS_BLOCKED)되어 원문을 열지 못했습니다.
+
+| 계열 (출시) | 입력 | 이미지 | 동영상 | 기타 | 근거 |
+|---|---|---|---|---|---|
+| Qwen 3.5~3.8 Plus/Flash/Max (2026) | 텍스트·이미지·동영상 | 토큰 한도 | 최대 2시간·2GB | | alibabacloud.com/help/en/model-studio/vision |
+| Qwen 3.5-Omni / 3.8-Omni-Flash (2026-09) | +오디오 | 파일 64개/요청 | 64 | 파일당 2GB·2시간 | Model Studio qwen3-8-omni-flash |
+| DeepSeek V4-Flash-Vision-Exp → V4.1-Flash | 텍스트·이미지 | 600 (Exp) | 미지원 | V4 Pro는 텍스트 전용 | api-docs.deepseek.com/guides/vision |
+| Kimi K2.5 (2026-01) / K2.6 / K3 (2026-07) | 텍스트·이미지·동영상 | 개수 제한 없음 | 지원(공식 API) | 본문 100MB | platform.kimi.ai |
+| GLM-4.5V / 4.6V (2025-12) | 텍스트·이미지·동영상 | 10 (장당 50MB) | 지원 | | docs.z.ai |
+| GLM-5V-Turbo / GLM-5.3-Flash (2026) | 텍스트·이미지·동영상·파일 | 컨텍스트 한도 | 지원 | | docs.z.ai |
+| MiniMax M3 (2026-06) | 텍스트·이미지·동영상 | 장당 10MB | 개당 50MB | 본문 64MB, M2.x는 텍스트 전용 | minimax.io/blog/minimax-m3 |
+| ERNIE 5.0 (2026-01) | 텍스트·이미지·오디오·동영상 | 미공개 | 미공개 | 128K 컨텍스트 | ERNIE for Developers 발표 |
+| ERNIE 4.5 VL | 텍스트·이미지·동영상 | 10 | 3 | | FastDeploy 문서 |
+| Doubao Seed 1.6-vision / 2.0 / 2.1 | 텍스트·이미지·동영상 | 미공개 | 미공개 | 256K | docs.byteplus.com |
+| Xiaomi MiMo-V2-Omni | 이미지·동영상·오디오 | 미공개 | 미공개 | | mimo.xiaomi.com |
+| StepFun Step 3 / 3.7 Flash (2026-05) | 텍스트·이미지 | 미공개 | – | | stepfun.ai |
+| Tencent Hunyuan-Large-Vision | 이미지·동영상 | 미공개 | 미공개 | | Tencent Hunyuan 발표 |
+
+텍스트 전용이라 첨부를 받지 않는 모델: DeepSeek V3.2 / V4 Pro, Kimi K2 Thinking, GLM-4.6 / 4.7 / 5,
+MiniMax M2 / M2.1 / M2.5 / M2.7, Hunyuan Hy3 (텍스트 중심).
