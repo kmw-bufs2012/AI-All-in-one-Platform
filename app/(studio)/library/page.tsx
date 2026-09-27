@@ -58,11 +58,12 @@ interface JobRecord {
 const FILTERS: Array<{ value: Filter; label: string; icon: IconName }> = [
   { value: "all", label: "전체", icon: "grid" },
   { value: "image", label: "이미지", icon: "image" },
-  { value: "video", label: "영상", icon: "video" },
+  { value: "video", label: "동영상", icon: "video" },
   { value: "audio", label: "음성", icon: "audio" },
 ];
 
-const KIND_LABEL: Record<AssetKind, string> = { image: "이미지", video: "영상", audio: "음성" };
+const KIND_LABEL: Record<AssetKind, string> = { image: "이미지", video: "동영상", audio: "음성" };
+const KIND_ORDER: AssetKind[] = ["image", "video", "audio"];
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -264,6 +265,8 @@ export default function LibraryPage() {
       if (list) list.push(asset);
       else map.set(key, [asset]);
     }
+    // 같은 날짜 안에서는 이미지 → 동영상 → 음성 순으로 나눠 보여 줍니다.
+    for (const list of map.values()) list.sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
     return Array.from(map.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [assets, filter]);
 
@@ -418,8 +421,15 @@ export default function LibraryPage() {
             {formatDateGroup(dateKey)}
             <span className="lib-count">{items.length}</span>
           </h2>
+          {KIND_ORDER.filter((kind) => items.some((asset) => asset.kind === kind)).map((kind) => (
+          <div className="lib-kind" key={kind}>
+          <h3 className="lib-kind-title">
+            <Icon name={kind} size={14} />
+            {KIND_LABEL[kind]}
+            <span className="lib-count">{items.filter((asset) => asset.kind === kind).length}</span>
+          </h3>
           <div className="result-grid">
-            {items.map((asset) => {
+            {items.filter((asset) => asset.kind === kind).map((asset) => {
               if (asset.kind === "audio") {
                 return (
                   <div key={asset.id} className="asset-tile audio-tile" title={asset.prompt}>
@@ -484,6 +494,8 @@ export default function LibraryPage() {
               );
             })}
           </div>
+          </div>
+          ))}
         </section>
       ))}
 

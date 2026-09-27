@@ -2572,3 +2572,14 @@ button.new-session-button {
   .viewer-media img, .viewer-media video { max-height: calc(55vh - 24px); }
   .viewer-panel { border-left: none; border-top: 1px solid var(--border); }
 }
+
+.lib-kind + .lib-kind { margin-top: 18px; }
+.lib-kind-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 4px 0 10px;
+}
