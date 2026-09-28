@@ -10,6 +10,31 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 
 const STORAGE_PREFIX = "studio:";
 
+/*
+ * 채팅 대화와 프롬프트 초안은 탭을 닫아도 7일간 남도록 localStorage 에 둡니다.
+ * 나머지 값은 기존처럼 탭 단위(sessionStorage)로만 보관합니다.
+ */
+const PERSIST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PERSISTED_KEYS = new Set([
+  "chat:messages",
+  "chat:input",
+  "chat:conversationId",
+  "image:prompt",
+  "video:prompt",
+  "audio:input",
+]);
+
+function readPersisted(key: string): unknown {
+  const raw = localStorage.getItem(STORAGE_PREFIX + key);
+  if (raw === null) return undefined;
+  const parsed = JSON.parse(raw) as { savedAt?: number; value?: unknown };
+  if (typeof parsed?.savedAt !== "number" || Date.now() - parsed.savedAt >= PERSIST_TTL_MS) {
+    localStorage.removeItem(STORAGE_PREFIX + key);
+    return undefined;
+  }
+  return parsed.value;
+}
+
 type Store = {
   read: (key: string) => unknown;
   write: (key: string, value: unknown) => void;
@@ -23,6 +48,11 @@ export function StudioStateProvider({ children }: { children: React.ReactNode })
   const read = useCallback((key: string) => {
     if (memory.current.has(key)) return memory.current.get(key);
     try {
+      if (PERSISTED_KEYS.has(key)) {
+        const persisted = readPersisted(key);
+        if (persisted !== undefined) memory.current.set(key, persisted);
+        return persisted;
+      }
       const raw = sessionStorage.getItem(STORAGE_PREFIX + key);
       if (raw === null) return undefined;
       const parsed = JSON.parse(raw);
@@ -36,6 +66,10 @@ export function StudioStateProvider({ children }: { children: React.ReactNode })
   const write = useCallback((key: string, value: unknown) => {
     memory.current.set(key, value);
     try {
+      if (PERSISTED_KEYS.has(key)) {
+        localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify({ savedAt: Date.now(), value }));
+        return;
+      }
       sessionStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value));
     } catch {
       // 저장이 막힌 환경에서는 메모리 스토어만으로 동작합니다.
