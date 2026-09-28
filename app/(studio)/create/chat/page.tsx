@@ -3,6 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { useStudioState } from "@/components/StudioState";
+import {
+  clearConversations,
+  deleteConversation,
+  listConversations,
+  newConversationId,
+  saveConversation,
+  type ArchivedConversation,
+} from "@/lib/chat-archive";
 import { useModels } from "@/components/useModels";
 import {
   AttachStrip,
@@ -46,6 +54,9 @@ export default function ChatPage() {
   const [messages, setMessages] = useStudioState<ChatMessage[]>("chat:messages", []);
   const [input, setInput] = useStudioState<string>("chat:input", "");
   const [attachments, setAttachments] = useStudioState<AttachedFile[]>("chat:attachments", []);
+  const [conversationId, setConversationId] = useStudioState<string>("chat:conversationId", "");
+  const [archive, setArchive] = useState<ArchivedConversation<ChatMessage>[]>([]);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [compressingVideo, setCompressingVideo] = useState(false);
   const [error, setError] = useState("");
@@ -145,7 +156,50 @@ export default function ChatPage() {
     }
   }
 
+  useEffect(() => {
+    setArchive(listConversations<ChatMessage>());
+  }, []);
+
+  // 대화가 바뀔 때마다 7일 보관함에 반영합니다. 스트리밍 중에는 끝난 뒤 한 번만 저장합니다.
+  useEffect(() => {
+    if (sending || messages.length === 0) return;
+    let id = conversationId;
+    if (!id) {
+      id = newConversationId();
+      setConversationId(id);
+    }
+    const existing = listConversations<ChatMessage>().find((item) => item.id === id);
+    if (existing && JSON.stringify(existing.messages) === JSON.stringify(messages)) return;
+    const firstUser = messages.find((message) => message.role === "user");
+    const title = (firstUser?.content || "첨부만 보낸 대화").replace(/\s+/g, " ").trim().slice(0, 60);
+    saveConversation<ChatMessage>({ id, title, updatedAt: Date.now(), messages });
+    setArchive(listConversations<ChatMessage>());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, sending]);
+
+  function openConversation(item: ArchivedConversation<ChatMessage>) {
+    setMessages(item.messages);
+    setConversationId(item.id);
+    setAttachments([]);
+    setError("");
+    setArchiveOpen(false);
+  }
+
+  function removeConversation(id: string) {
+    deleteConversation(id);
+    setArchive(listConversations<ChatMessage>());
+    if (id === conversationId) startNewSession();
+  }
+
+  function removeAllConversations() {
+    if (!window.confirm("이 브라우저에 보관된 대화를 모두 지울까요? 되돌릴 수 없습니다.")) return;
+    clearConversations();
+    setArchive([]);
+    startNewSession();
+  }
+
   function startNewSession() {
+    setConversationId("");
     setMessages([]);
     setInput("");
     setAttachments([]);
@@ -507,7 +561,58 @@ export default function ChatPage() {
         <div className="studio-inner">
           <div className="studio-toolbar">
             <NewSessionButton disabled={sending || compressingVideo} onClick={startNewSession} />
+            <button
+              type="button"
+              className="secondary new-session-button"
+              disabled={sending}
+              onClick={() => setArchiveOpen((open) => !open)}
+              aria-expanded={archiveOpen}
+            >
+              <Icon name="history" size={15} /> 보관된 대화 ({archive.length})
+            </button>
           </div>
+          {archiveOpen ? (
+            <div className="panel" style={{ padding: 14, marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                <strong>최근 7일 대화</strong>
+                {archive.length > 0 ? (
+                  <button type="button" className="secondary new-session-button" onClick={removeAllConversations}>
+                    모두 지우기
+                  </button>
+                ) : null}
+              </div>
+              <p style={{ fontSize: 12, opacity: 0.7, margin: "6px 0 10px" }}>
+                이 브라우저에만 저장되며 마지막 대화 후 7일이 지나면 자동 삭제됩니다. 첨부 파일 미리보기는 서버 보관 기간이 지나면 열리지 않을 수 있습니다.
+              </p>
+              {archive.length === 0 ? (
+                <div style={{ fontSize: 13, opacity: 0.7 }}>보관된 대화가 없습니다.</div>
+              ) : (
+                <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
+                  {archive.map((item) => (
+                    <li key={item.id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button
+                        type="button"
+                        className="secondary new-session-button"
+                        style={{ flex: 1, minWidth: 0, justifyContent: "flex-start", textAlign: "left" }}
+                        onClick={() => openConversation(item)}
+                      >
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                          {item.id === conversationId ? "● " : ""}
+                          {item.title}
+                        </span>
+                        <span style={{ fontSize: 12, opacity: 0.6 }}>
+                          {new Date(item.updatedAt).toLocaleString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </button>
+                      <button type="button" className="secondary new-session-button" aria-label="이 대화 삭제" onClick={() => removeConversation(item.id)}>
+                        삭제
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
           <ModelDetail hook={models} />
 
           {messages.length === 0 && !sending ? (

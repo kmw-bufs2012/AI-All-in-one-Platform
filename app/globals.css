@@ -968,6 +968,8 @@ button.danger:hover:not(:disabled) {
 .studio-toolbar {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 12px;
 }
 
