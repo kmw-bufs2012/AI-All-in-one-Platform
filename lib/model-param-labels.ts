@@ -7,6 +7,17 @@
 
 export const PARAM_KEY_LABELS: Record<string, string> = {
   aspect_ratio: "비율",
+  // 제작사 공식 문서로 보강한 이미지 설정(lib/image-settings-overlay.ts).
+  background: "배경",
+  output_format: "파일 형식",
+  image_size: "출력 크기",
+  safety_tolerance: "안전 필터 허용도",
+  prompt_upsampling: "프롬프트 자동 보강",
+  prompt_extend: "프롬프트 자동 보강",
+  prompt_optimizer: "프롬프트 자동 최적화",
+  magic_prompt: "매직 프롬프트",
+  sequential_image_generation: "연속(세트) 이미지 생성",
+  max_images: "세트 최대 장수",
   aspectratio: "비율",
   ratio: "비율",
   quality: "품질",
@@ -176,7 +187,11 @@ const VALUE_LOOKUP_KEY_ALIASES: Record<string, string> = {
 
 export function paramValueLabel(key: string, value: string): string {
   const lookupKey = VALUE_LOOKUP_KEY_ALIASES[key.toLowerCase()] ?? key.toLowerCase();
-  return PARAM_VALUE_LABELS[lookupKey]?.[value.toLowerCase()] ?? value;
+  const known = PARAM_VALUE_LABELS[lookupKey]?.[value.toLowerCase()];
+  if (known) return known;
+  if (value === "true") return "켜기";
+  if (value === "false") return "끄기";
+  return value;
 }
 
 /*

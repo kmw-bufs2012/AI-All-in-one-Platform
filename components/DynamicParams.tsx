@@ -17,10 +17,13 @@ export function DynamicParamsPanel({
   params,
   values,
   onChange,
+  source,
 }: {
   params: ExtraParam[];
   values: ParamValues;
   onChange: (key: string, value: string | number | undefined) => void;
+  /** 공식 문서로 보강한 설정의 출처. */
+  source?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   if (params.length === 0) return null;
@@ -41,6 +44,9 @@ export function DynamicParamsPanel({
               onChange={(value) => onChange(param.key, value)}
             />
           ))}
+          {source && params.some((param) => param.origin === "official") ? (
+            <p className="param-source">공식 문서 설정 출처: {source}</p>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -71,7 +77,17 @@ function ParamControl({
   value: string | number | undefined;
   onChange: (value: string | number | undefined) => void;
 }) {
-  const label = paramKeyLabel(param.key);
+  const label = (
+    <>
+      {paramKeyLabel(param.key)}
+      {param.origin === "official" ? (
+        <span className="param-official" title="NanoGPT 카탈로그에는 없지만 제작사 공식 문서로 확인한 설정입니다">
+          공식 문서
+        </span>
+      ) : null}
+      {param.note ? <span className="param-note">{param.note}</span> : null}
+    </>
+  );
 
   if (param.kind === "range" && param.min !== undefined && param.max !== undefined) {
     // 값이 전부 숫자인 enum(예: duration "5"/"10")도 여기서 슬라이더로 그립니다.

@@ -147,3 +147,13 @@ export function readableError(body: unknown): string {
   }
   return "요청 처리에 실패했습니다.";
 }
+const PROGRESS_KEYS = ["progress", "percent", "percentage", "progress_percent", "progressPercent"];
+
+/** 공급자가 진행률을 알려 주면 0~100 숫자로 돌려줍니다(0~1 값은 100배). */
+export function extractProgress(body: unknown): number | null {
+  const found = walk(body, PROGRESS_KEYS);
+  const value = typeof found === "number" ? found : typeof found === "string" ? parseFloat(found) : NaN;
+  if (!Number.isFinite(value) || value < 0) return null;
+  const percent = value <= 1 && !Number.isInteger(value) ? value * 100 : value;
+  return percent > 100 ? null : percent;
+}

@@ -23,7 +23,8 @@ import { recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { resolveImageAttachmentPolicy } from "@/lib/attachment-policy";
 import { formatCost } from "@/lib/cost";
 import { filterSupportedParamValues } from "@/lib/models";
-import { PROMPT_STYLE_PRESETS } from "@/lib/model-param-labels";
+import { PROMPT_STYLE_PRESETS, paramKeyLabel } from "@/lib/model-param-labels";
+import { GenerationTile, useNow, type GenerationJob } from "@/components/GenerationProgress";
 
 /*
  * 해상도 목록은 고정값이 아니라 모델이 공개한 값을 씁니다.
@@ -32,6 +33,8 @@ import { PROMPT_STYLE_PRESETS } from "@/lib/model-param-labels";
  * 고르지 않으면 resolution 을 보내지 않아 모델 기본값으로 생성됩니다.
  */
 const DEFAULT_RESOLUTION = "default";
+/* 한 번에 만들 수 있는 최대 장수. 모델이 n을 지원하지 않으면 요청을 나란히 보냅니다. */
+const MAX_BATCH = 8;
 
 function formatBytes(bytes: number): string {
   return `${Math.round(bytes / (1024 * 1024))}MB`;
@@ -46,6 +49,10 @@ export default function ImagePage() {
   const [stylePreset, setStylePreset] = useStudioState<string>("image:stylePreset", "");
   const [results, setResults] = useStudioState<string[]>("image:results", []);
   const [generating, setGenerating] = useState(false);
+  const [jobs, setJobs] = useState<GenerationJob[]>([]);
+  const [batchCount, setBatchCount] = useStudioState<string>("image:batchCount", "1");
+  const [notice, setNotice] = useState("");
+  const now = useNow(jobs.length > 0);
   const [error, setError] = useState("");
   const [costLine, setCostLine] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
@@ -120,52 +127,107 @@ export default function ImagePage() {
       return;
     }
     setError("");
+    setNotice("");
     setGenerating(true);
     // 구조화된 style 파라미터가 없는 모델에서 프리셋을 골랐다면, API 파라미터가
     // 아니라 프롬프트 문구로 반영합니다(존재하지 않는 style 필드를 보내지 않기 위함).
     const preset = !hasStructuredStyle ? PROMPT_STYLE_PRESETS.find((item) => item.value === stylePreset) : undefined;
     const finalPrompt = preset ? `${text}, ${preset.promptPhrase}` : text;
-    try {
-      const response = await fetch("/api/image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+
+    // 카탈로그 설정과 공식 문서로 보강한 설정을 나눠 보냅니다(서버가 공식 설정만
+    // 거부되면 빼고 다시 시도합니다).
+    const allowed = filterSupportedParamValues(model.imageParams, paramValues);
+    const officialKeys = new Set(model.imageParams.filter((item) => item.origin === "official").map((item) => item.key));
+    const catalogParams: ParamValues = {};
+    const officialParams: ParamValues = {};
+    for (const [key, value] of Object.entries(allowed)) {
+      if (officialKeys.has(key)) officialParams[key] = value;
+      else catalogParams[key] = value;
+    }
+
+    // 여러 장: 모델이 한 요청에 여러 장(n)을 지원하면 한 번에, 아니면 요청을 나란히 보냅니다.
+    const wanted = Math.max(1, Math.min(MAX_BATCH, Number(batchCount) || 1));
+    const perRequest = Math.min(wanted, Math.max(1, maxOutputImages));
+    const requestCount = Math.ceil(wanted / perRequest);
+    const startedAt = Date.now();
+    const expectedMs = 25 * 1000 + (activeResolution.match(/4k|2048|4096/i) ? 20 * 1000 : 0);
+    const batch: GenerationJob[] = Array.from({ length: wanted }, (_, index) => ({
+      id: `${startedAt}-${index}`,
+      startedAt,
+      expectedMs,
+      reported: null,
+      status: "이미지 만드는 중",
+      state: "running",
+    }));
+    setJobs(batch);
+
+    const runRequest = async (requestIndex: number) => {
+      const n = Math.min(perRequest, wanted - requestIndex * perRequest);
+      const jobIds = batch.slice(requestIndex * perRequest, requestIndex * perRequest + n).map((job) => job.id);
+      try {
+        const response = await fetch("/api/image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: model.id,
+            prompt: finalPrompt,
+            referenceIds: refs.map((item) => item.id),
+            resolution: activeResolution === DEFAULT_RESOLUTION ? undefined : activeResolution,
+            officialResolution: model.officialResolutions === true,
+            n: n > 1 ? n : undefined,
+            params: catalogParams,
+            officialParams,
+          }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || "이미지 생성에 실패했습니다.");
+        const urls: string[] = Array.isArray(body.urls) ? body.urls : [];
+        setResults((prev) => [...urls, ...prev]);
+        setJobs((prev) => prev.filter((job) => !jobIds.includes(job.id)));
+        const dropped: string[] = Array.isArray(body.droppedParams) ? body.droppedParams : [];
+        if (dropped.length > 0) {
+          setNotice(`NanoGPT가 이 모델의 일부 설정(${dropped.map(paramKeyLabel).join(", ")})을 받지 않아 빼고 생성했습니다.`);
+        }
+        // NanoGPT 응답에 실제 청구액(cost)이 있으면 그 값을, 없으면 카탈로그 단가로 추정합니다.
+        const actualCost = body.cost as { amount: number; currency: string | null } | null;
+        const estimatedAmount = unitPrice !== null ? unitPrice * Math.max(urls.length, 1) : null;
+        const amount = actualCost?.amount ?? estimatedAmount;
+        const currency = actualCost?.currency ?? model.pricing?.currency ?? null;
+        recordJob({
+          mode: "image",
           model: model.id,
-          prompt: finalPrompt,
-          referenceIds: refs.map((item) => item.id),
-          resolution: activeResolution === DEFAULT_RESOLUTION ? undefined : activeResolution,
-          params: filterSupportedParamValues(model.imageParams, paramValues),
-        }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || "이미지 생성에 실패했습니다.");
-      const urls: string[] = Array.isArray(body.urls) ? body.urls : [];
-      setResults((prev) => [...urls, ...prev]);
-      // NanoGPT 응답에 실제 청구액(cost)이 실려 있으면 그 값을 그대로 쓰고,
-      // 없을 때만 카탈로그 단가로 추정합니다(공식 문서: 응답마다 cost 필드가
-      // 실제 청구액을 담아 옵니다).
-      const actualCost = body.cost as { amount: number; currency: string | null } | null;
-      const estimatedAmount = unitPrice !== null ? unitPrice * Math.max(urls.length, 1) : null;
-      const finalAmount = actualCost?.amount ?? estimatedAmount;
-      const finalCurrency = actualCost?.currency ?? models.selected?.pricing?.currency ?? null;
-      setCostLine(formatCost(finalAmount, finalCurrency));
-      recordJob({
-        mode: "image",
-        model: model.id,
-        prompt: text,
-        attachments: refs,
-        usage: null,
-        unitPrice: model.pricing,
-        cost: finalAmount,
-        currency: finalCurrency,
-        costSource: actualCost ? "actual" : finalAmount !== null ? "estimated" : null,
-        status: "completed",
-        result: { kind: "images", urls },
-      });
-    } catch (generateError) {
-      setError(generateError instanceof Error ? generateError.message : "이미지 생성에 실패했습니다.");
+          prompt: text,
+          attachments: refs,
+          usage: null,
+          unitPrice: model.pricing,
+          cost: amount,
+          currency,
+          costSource: actualCost ? "actual" : amount !== null ? "estimated" : null,
+          status: "completed",
+          result: { kind: "images", urls },
+        });
+        return { amount, currency, actual: Boolean(actualCost), error: null as string | null };
+      } catch (requestError) {
+        const message = requestError instanceof Error ? requestError.message : "이미지 생성에 실패했습니다.";
+        setJobs((prev) => prev.map((job) => (jobIds.includes(job.id) ? { ...job, state: "failed", status: message } : job)));
+        return { amount: null, currency: null, actual: false, error: message };
+      }
+    };
+
+    try {
+      const outcomes = await Promise.all(Array.from({ length: requestCount }, (_, index) => runRequest(index)));
+      const priced = outcomes.filter((item) => item.amount !== null);
+      if (priced.length > 0) {
+        const total = priced.reduce((sum, item) => sum + (item.amount ?? 0), 0);
+        setCostLine(`${priced.every((item) => item.actual) ? "" : "추정 "}${formatCost(total, priced[0].currency)}`);
+      }
+      const failures = outcomes.filter((item) => item.error);
+      if (failures.length > 0) {
+        setError(requestCount > 1 ? `${requestCount}개 요청 중 ${failures.length}개 실패: ${failures[0].error}` : failures[0].error!);
+      }
     } finally {
       setGenerating(false);
+      setTimeout(() => setJobs((prev) => prev.filter((job) => job.state === "running")), 6000);
     }
   }
 
@@ -181,22 +243,32 @@ export default function ImagePage() {
             params={models.selected?.imageParams ?? []}
             values={paramValues}
             onChange={changeParam}
+            source={models.selected?.settingsSource}
           />
           <MediaCostEstimate
             kind="image"
             modelId={models.selected?.id}
-            params={paramValues}
+            params={{ ...paramValues, n: batchCount }}
             resolution={activeResolution === DEFAULT_RESOLUTION ? null : activeResolution}
             catalogUnitPrice={models.selected?.pricing?.perRequest ?? null}
             catalogCurrency={models.selected?.pricing?.currency ?? null}
           />
 
-          {results.length === 0 ? (
+          {jobs.length > 0 ? (
+            <div className="result-grid" style={{ marginBottom: 18 }}>
+              {jobs.map((job) => (
+                <GenerationTile key={job.id} job={job} now={now} />
+              ))}
+            </div>
+          ) : null}
+          {notice ? <p className="muted" style={{ fontSize: 11.5, marginBottom: 12 }}>{notice}</p> : null}
+
+          {results.length === 0 && jobs.length === 0 ? (
             <div className="studio-hero">
               <h1>이미지 만들기</h1>
               <p>만들고 싶은 장면을 문장으로 적어 보세요. 참조 이미지를 더하면 분위기를 이어받습니다.</p>
             </div>
-          ) : (
+          ) : results.length === 0 ? null : (
             <>
               <div className="section-head">
                 <h2>생성 결과</h2>
@@ -226,11 +298,6 @@ export default function ImagePage() {
             </>
           )}
 
-          {generating ? (
-            <div className="progress-note" style={{ marginTop: 18 }}>
-              <span className="spinner" /> 이미지를 만들고 있습니다. 완료까지 시간이 걸릴 수 있습니다.
-            </div>
-          ) : null}
         </div>
       </div>
 
@@ -289,12 +356,19 @@ export default function ImagePage() {
                   : "이 모델은 참조 이미지를 지원하지 않습니다"
               }
             />
+            <SelectChip
+              icon="quality"
+              title={
+                maxOutputImages > 1
+                  ? `한 요청에 최대 ${maxOutputImages}장, 그 이상은 요청을 나란히 보냅니다`
+                  : "요청을 나란히 보내 여러 장을 동시에 만듭니다"
+              }
+              value={batchCount}
+              onChange={setBatchCount}
+              disabled={generating}
+              options={Array.from({ length: MAX_BATCH }, (_, index) => ({ value: String(index + 1), label: `${index + 1}장` }))}
+            />
             <span className="dock-spacer" />
-            {maxOutputImages > 1 ? (
-              <span className="muted" style={{ fontSize: 11.5 }}>
-                한 번에 최대 {maxOutputImages}장 생성 가능
-              </span>
-            ) : null}
             {models.selected && !supportsRefs && refs.length > 0 ? (
               <span className="muted" style={{ fontSize: 11.5 }}>
                 참조 이미지는 전송되지 않습니다
