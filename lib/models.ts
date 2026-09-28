@@ -156,6 +156,8 @@ export interface NormalizedModel {
   officialMaxImages?: number | null;
   /** 보강한 공식 설정의 출처. */
   settingsSource?: string | null;
+  /** 값 목록·범위 없이 이름만 공개된 자유 입력 파라미터 키(소문자). */
+  freeTextParams?: string[];
   imageParams: ExtraParam[];
 
   /* ------------------------------------------------------- 동영상 생성 모델 */
@@ -604,7 +606,8 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const videoParam = hasParam(params, "videourl", "video_url", "videodataurl", "source_video");
   const acceptsSourceVideo = videoParam
     ? true
-    : mentions(haystack, /extend|video[- ]?to[- ]?video|\bv2v\b|video[- ]?edit/)
+    // reference-to-video(예: Seedance 2.0 reference)는 참조 동영상을 받습니다(BytePlus 공식 문서).
+    : mentions(haystack, /extend|video[- ]?to[- ]?video|\bv2v\b|video[- ]?edit|reference[- ]?to[- ]?video/)
       ? true
       : null;
   // 시작 이미지·원본 동영상 입력 파라미터는 빼고, 나머지(길이·해상도·품질 등)를
@@ -614,6 +617,15 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     "videourl", "video_url", "videodataurl", "source_video",
   ]);
   const rawVideoParams = kind === "video" ? extractExtraParams(params, videoExclude) : [];
+  // 값 목록·범위 없이 이름만 공개된 자유 입력 파라미터(예: negative_prompt, seed).
+  const freeTextParams = Array.from(params.names).filter((key) => {
+    if (videoExclude.has(key) || imageExclude.has(key)) return false;
+    const def = params.defs[key];
+    if (!def) return true;
+    return optionValues(def.values ?? def.enum ?? def.options).length === 0
+      && asNumber(def.min ?? def.minimum) === null
+      && asNumber(def.max ?? def.maximum) === null;
+  });
   // 원 개발사 자료로 확인된 길이 상한이 있으면 카탈로그 값을 그 이상으로
   // 넓히지 않고 좁히기만 합니다(lib/model-capability-overlay.ts 상단 설명 참고).
   const videoOverlay = kind === "video" ? findVideoOverlay(id, name) : null;
@@ -658,6 +670,7 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     maxInputReferences,
     referenceFormats,
     referenceMaxBytes,
+    freeTextParams,
     resolutions: resolutions.length > 0 ? resolutions : (imageOverlay?.resolutions ?? []),
     officialResolutions: resolutions.length === 0 && Boolean(imageOverlay?.resolutions?.length),
     officialMaxImages: imageOverlay?.officialMaxImages ?? null,

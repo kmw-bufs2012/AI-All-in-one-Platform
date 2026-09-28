@@ -8,11 +8,14 @@ import {
 } from "@/components/DynamicParams";
 import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
-import { AttachStrip, FileChip, ModelChip, ModelDetail, NewSessionButton, SelectChip, SendButton } from "@/components/studio-ui";
+import { AttachmentMedia, AttachStrip, FileChip, ModelChip, ModelDetail, NewSessionButton, SelectChip, SendButton } from "@/components/studio-ui";
 import { GenerationTile, useNow, type GenerationJob } from "@/components/GenerationProgress";
 import { MAX_VIDEO_BYTES, needsVideoCompression, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { resolveVideoAttachmentPolicy } from "@/lib/attachment-policy";
 import { filterSupportedParamValues } from "@/lib/models";
+import { buildShotPrompt, type MasterSettings, type ShotFrame } from "@/lib/master-prompt";
+import { applyMasterSettings, supportsNegativePrompt, supportsSeed } from "@/lib/master-settings-apply";
+
 
 const POLL_INTERVAL_MS = 5000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -35,6 +38,14 @@ export default function VideoPage() {
   const [busy, setBusy] = useState(false);
   const [compressingVideo, setCompressingVideo] = useState(false);
   const [jobs, setJobs] = useState<GenerationJob[]>([]);
+  // 마스터 프롬프트 화면에서 넘어온 값(lib/master-prompt.ts, components/VideoMasterPrompt.tsx).
+  const [masterSettings] = useStudioState<MasterSettings | null>("video:masterSettings", null);
+  const [masterPrompt] = useStudioState<string>("video:masterPrompt", "");
+  const [shotFrames] = useStudioState<ShotFrame[]>("video:shotFrames", []);
+  const [seedLock, setSeedLock] = useStudioState<{ locked: boolean; value: number }>("video:seed", { locked: false, value: 1234 });
+  const [textParams, setTextParams] = useStudioState<Record<string, string>>("video:textParams", {});
+  const [appliedNote, setAppliedNote] = useState("");
+  const [droppedNote, setDroppedNote] = useState("");
   const [batchCount, setBatchCount] = useStudioState<string>("video:batchCount", "1");
   const now = useNow(jobs.length > 0);
   const [estimate, setEstimate] = useState<{ amount: number; currency: string | null; actual: boolean } | null>(null);
@@ -72,6 +83,46 @@ export default function VideoPage() {
       else next[key] = value;
       return next;
     });
+  }
+
+  const seedSupported = supportsSeed(models.selected);
+  const negativeSupported = supportsNegativePrompt(models.selected);
+
+  // 마스터 프롬프트 설정을 모델이 공개한 파라미터에 맞춰 자동으로 채웁니다(모델을 바꾸면 다시 맞춤).
+  useEffect(() => {
+    const model = models.selected;
+    if (!model || !masterSettings) return;
+    const result = applyMasterSettings(model, masterSettings, seedLock.locked ? seedLock.value : null);
+    setParamValues((previous) => ({ ...previous, ...result.params }));
+    setTextParams((previous) => ({ ...previous, ...result.text }));
+    setAppliedNote(
+      `마스터 프롬프트 설정 자동 적용: ${result.applied.length ? result.applied.join(", ") : "적용 가능한 항목 없음"}` +
+        (result.skipped.length ? ` · 이 모델 미지원: ${result.skipped.join(", ")}` : ""),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [models.selected?.id, masterSettings]);
+
+  function applyShot(index: number) {
+    const frame = shotFrames[index];
+    if (!frame) return;
+    const shotPrompt = masterPrompt ? buildShotPrompt(masterPrompt, index) : null;
+    if (shotPrompt) setPrompt(shotPrompt);
+    if (frame.image) setStartImage(frame.image);
+    const model = models.selected;
+    if (model && masterSettings) {
+      const result = applyMasterSettings(model, { ...masterSettings, duration: frame.end - frame.start }, seedLock.locked ? seedLock.value : null);
+      setParamValues((previous) => ({ ...previous, ...result.params }));
+    }
+  }
+
+  function applyWholeVideo() {
+    if (masterPrompt) setPrompt(masterPrompt);
+    if (shotFrames[0]?.image) setStartImage(shotFrames[0].image);
+    const model = models.selected;
+    if (model && masterSettings) {
+      const result = applyMasterSettings(model, masterSettings, seedLock.locked ? seedLock.value : null);
+      setParamValues((previous) => ({ ...previous, ...result.params }));
+    }
   }
 
   async function pickStartImage(event: React.ChangeEvent<HTMLInputElement>) {
@@ -203,11 +254,18 @@ export default function VideoPage() {
             startImageId: supportsStartImage ? startImage?.id : undefined,
             sourceVideoId: supportsSourceVideo ? sourceVideo?.id : undefined,
             endImageId: supportsEndFrame ? endFrameImage?.id : undefined,
-            params: filterSupportedParamValues(model.videoParams, paramValues),
+            params: {
+              ...filterSupportedParamValues(model.videoParams, paramValues),
+              ...(negativeSupported && textParams.negative_prompt ? { negative_prompt: textParams.negative_prompt.slice(0, 500) } : {}),
+              ...(seedSupported && seedLock.locked ? { seed: seedLock.value } : {}),
+            },
           }),
         });
         const queueBody = await queueResponse.json().catch(() => ({}));
         if (!queueResponse.ok) throw new Error(queueBody.error || "동영상 생성 요청에 실패했습니다.");
+        if (queueBody.droppedReference) {
+          setDroppedNote("NanoGPT가 이 모델에서 참조 동영상을 받지 않아, 참조 동영상 없이 생성했습니다.");
+        }
         if (queueBody.cost) quote = { amount: queueBody.cost.amount, currency: queueBody.cost.currency ?? null, actual: true };
         const runId: string = queueBody.runId;
         updateJob(job.id, { status: "동영상 만드는 중" });
@@ -297,6 +355,72 @@ export default function VideoPage() {
             catalogUnitPrice={models.selected?.pricing?.perRequest ?? null}
             catalogCurrency={models.selected?.pricing?.currency ?? null}
           />
+          {appliedNote ? <p className="muted" style={{ fontSize: 11.5, marginBottom: 8 }}>{appliedNote}</p> : null}
+          {droppedNote ? <p className="muted" style={{ fontSize: 11.5, marginBottom: 8 }}>{droppedNote}</p> : null}
+          <div className="video-extra-settings">
+            <label className="seed-control" title={seedSupported ? "같은 시드로 다시 만들면 결과 편차가 줄어듭니다" : "선택한 모델은 시드를 공개하지 않았습니다"}>
+              <input
+                type="checkbox"
+                checked={seedLock.locked}
+                disabled={!seedSupported}
+                onChange={(event) => setSeedLock({ ...seedLock, locked: event.target.checked })}
+              />
+              <span>시드 고정</span>
+              <input
+                type="number"
+                min={0}
+                max={2147483647}
+                value={seedLock.value}
+                disabled={!seedSupported || !seedLock.locked}
+                onChange={(event) => setSeedLock({ ...seedLock, value: Math.max(0, Math.min(2147483647, Math.floor(Number(event.target.value) || 0))) })}
+              />
+              <button
+                type="button"
+                className="secondary"
+                disabled={!seedSupported || !seedLock.locked}
+                onClick={() => setSeedLock({ ...seedLock, value: Math.floor(Math.random() * 2147483647) })}
+                title="새 시드 뽑기"
+              >
+                새 시드
+              </button>
+              {!seedSupported && models.selected ? <span className="muted">(이 모델 미지원)</span> : null}
+            </label>
+            {negativeSupported ? (
+              <label className="negative-control">
+                <span>네거티브 프롬프트</span>
+                <textarea
+                  value={textParams.negative_prompt ?? ""}
+                  maxLength={500}
+                  onChange={(event) => setTextParams({ ...textParams, negative_prompt: event.target.value })}
+                  placeholder="나오지 않았으면 하는 것(예: 얼굴 변형, 의상 변경, 깜빡임, 워터마크)"
+                />
+              </label>
+            ) : null}
+          </div>
+          {shotFrames.length > 0 ? (
+            <div className="shot-panel">
+              <div className="shot-panel-head">
+                <strong>참조 동영상 장면 ({shotFrames.length}개)</strong>
+                <button type="button" className="secondary" onClick={applyWholeVideo} disabled={busy}>
+                  전체 프롬프트 + 첫 프레임 사용
+                </button>
+              </div>
+              <p className="muted" style={{ fontSize: 11.5, margin: "4px 0 8px" }}>
+                장면을 누르면 그 장면의 첫 프레임을 시작 이미지로, 그 장면만 담은 프롬프트와 길이를 채웁니다. 장면별로 만든 뒤 편집
+                프로그램에서 이어 붙이면 원본에 더 가깝게 재현됩니다.
+              </p>
+              <div className="shot-grid">
+                {shotFrames.map((frame, index) => (
+                  <button key={`${frame.start}-${index}`} type="button" className="shot-card" onClick={() => applyShot(index)} disabled={busy}>
+                    {frame.image ? <AttachmentMedia kind="image" url={frame.image.url} alt={`장면 ${index + 1} 첫 프레임`} /> : <span className="shot-noimg">프레임 없음</span>}
+                    <span>
+                      장면 {index + 1} · {frame.start.toFixed(1)}–{frame.end.toFixed(1)}초
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {policy.note ? <p className="muted" style={{ fontSize: 11.5, marginTop: -8, marginBottom: 12 }}>{policy.note}</p> : null}
           {durationNote ? <p className="muted" style={{ fontSize: 11.5, marginTop: -8, marginBottom: 12 }}>{durationNote}</p> : null}
 
@@ -389,7 +513,7 @@ export default function VideoPage() {
             ) : null}
             {supportsSourceVideo ? (
               <FileChip
-                label={`원본 동영상 ${sourceVideo ? 1 : 0}/${policy.sourceVideo.max}`}
+                label={`${/reference/i.test(models.selected?.id ?? "") ? "참조" : "원본"} 동영상 ${sourceVideo ? 1 : 0}/${policy.sourceVideo.max}`}
                 accept="video/*"
                 disabled={compressingVideo}
                 onPick={pickSourceVideo}

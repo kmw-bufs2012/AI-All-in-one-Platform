@@ -84,11 +84,22 @@ export async function POST(request: NextRequest) {
   const reservedKeys = new Set(["model", "prompt", "imagedataurl", "videodataurl", "imageurl", "videourl"]);
   if (endImageField) reservedKeys.add(endImageField.toLowerCase());
   const extraParams = sanitizeExtraParams(body.params, reservedKeys);
+  if (typeof extraParams.seed === "string" && /^\d+$/.test(extraParams.seed)) extraParams.seed = Number(extraParams.seed);
   Object.assign(payload, extraParams);
 
   try {
-    const upstream = await queueVideo(payload);
-    const bodyText = await readJson(upstream);
+    let upstream = await queueVideo(payload);
+    let bodyText = await readJson(upstream);
+    // 참조 동영상(reference-to-video)은 NanoGPT가 받지 않을 수 있습니다. 거부(4xx)되면
+    // 참조 동영상만 빼고 한 번 더 요청하고, 뺐다는 사실을 알려 줍니다.
+    let droppedReference = false;
+    if (!upstream.ok && upstream.status >= 400 && upstream.status < 500 && ![401, 402].includes(upstream.status)
+      && payload.videoDataUrl && /reference/i.test(model)) {
+      delete payload.videoDataUrl;
+      droppedReference = true;
+      upstream = await queueVideo(payload);
+      bodyText = await readJson(upstream);
+    }
     if (!upstream.ok) {
       throw politeNanoGptError(upstream, bodyText, "NanoGPT 동영상 생성 요청에 실패했습니다.");
     }
@@ -105,6 +116,7 @@ export async function POST(request: NextRequest) {
       runId,
       status: extractStatus(bodyText) ?? "pending",
       cost: cost ? { amount: cost.amount, currency: cost.currency ?? "USD" } : null,
+      droppedReference,
       raw: bodyText,
     });
   } catch (error) {
