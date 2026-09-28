@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useStudioState } from "@/components/StudioState";
+import { extractAudioWav, extractFramesAt } from "@/lib/video-reference";
 import { useModels } from "@/components/useModels";
 import { ModelChip, AttachStrip } from "@/components/studio-ui";
 import { resolveChatAttachmentPolicy, isVideoCapableModel, MAX_TOTAL_FRAMES } from "@/lib/attachment-policy";
@@ -9,6 +12,9 @@ import {
   buildDirectPrompt,
   checkMasterPrompt,
   extractMasterPrompt,
+  extractMasterSettings,
+  type MasterSettings,
+  type ShotFrame,
   readVideoMeta,
   streamChat,
 } from "@/lib/master-prompt";
@@ -30,6 +36,17 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
   const [output, setOutput] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [sendReference, setSendReference] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [audioMode, setAudioMode] = useState<"in-video" | "separate-file" | "none" | null>(null);
+  const router = useRouter();
+  // 동영상 생성 화면과 공유하는 값(app/(studio)/create/video/page.tsx).
+  const [, setVideoPrompt] = useStudioState<string>("video:prompt", "");
+  const [, setMasterPromptState] = useStudioState<string>("video:masterPrompt", "");
+  const [, setMasterSettings] = useStudioState<MasterSettings | null>("video:masterSettings", null);
+  const [, setShotFrames] = useStudioState<ShotFrame[]>("video:shotFrames", []);
+  const [, setStartImage] = useStudioState<AttachedFile | null>("video:startImage", null);
+  const [, setSourceVideo] = useStudioState<AttachedFile | null>("video:sourceVideo", null);
 
   const writerPolicy = resolveChatAttachmentPolicy(writer.selected);
 
@@ -80,11 +97,37 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
       const meta = await readVideoMeta(video.url, video.name);
       setStage(`${writer.selected.name}이(가) 동영상을 보고 마스터 프롬프트를 작성하고 있습니다…`);
       const payload = await videoPayload(writerPolicy, video);
+      /*
+       * 대사·목소리·입모양: 음성을 들을 수 있는 모델(catalog audio_input — 예: Gemini,
+       * Gemma 3n, GPT-4o audio 계열)에만 소리를 전달합니다.
+       * - 동영상을 직접 보는 모델: 동영상 안의 소리를 그대로 듣게 합니다.
+       * - 프레임만 보는 모델: 소리를 WAV로 뽑아 오디오 첨부로 따로 보냅니다.
+       * - 음성을 못 듣는 모델: 대사를 지어내지 않도록 알립니다.
+       */
+      let mode: "in-video" | "separate-file" | "none" = "none";
+      const attachments: Record<string, string[]> = { ...(payload.attachments as Record<string, string[]>) };
+      if (writerPolicy.audio.allowed) {
+        if (writerPolicy.videoNative) {
+          mode = "in-video";
+        } else {
+          setStage("동영상에서 소리를 추출하고 있습니다…");
+          const blob = await attachmentBlob(video);
+          const wav = await extractAudioWav(blob, 15, `${video.name.replace(/\.[^.]+$/, "")}-audio.wav`);
+          if (wav) {
+            const [uploadedAudio] = await uploadFiles([wav]);
+            attachments.audios = [uploadedAudio.id];
+            mode = "separate-file";
+          }
+          setStage(`${writer.selected.name}이(가) 동영상을 보고 마스터 프롬프트를 작성하고 있습니다…`);
+        }
+      }
+      setAudioMode(mode);
       await streamChat(
         {
           model: writer.selected.id,
-          messages: [{ role: "user", content: buildDirectPrompt(meta, note) }],
+          messages: [{ role: "user", content: buildDirectPrompt(meta, note, mode) }],
           ...payload,
+          attachments,
           pdfAllowed: false,
         },
         setOutput,
@@ -100,6 +143,41 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
 
   const masterPrompt = output ? extractMasterPrompt(output) : "";
   const structure = masterPrompt && !running ? checkMasterPrompt(masterPrompt) : null;
+
+  /** 첫 프레임·장면별 첫 프레임·설정·(선택) 참조 동영상을 동영상 생성 화면으로 넘깁니다. */
+  async function sendToVideo() {
+    if (!video || !masterPrompt) return;
+    setSending(true);
+    setError("");
+    try {
+      const settings = extractMasterSettings(output, masterPrompt);
+      const shots = settings.shots.length > 0 ? settings.shots : [{ start: 0, end: settings.duration ?? 5 }];
+      setStage("장면별 첫 프레임을 추출하고 있습니다…");
+      const blob = await attachmentBlob(video);
+      const frames = await extractFramesAt(blob, shots.map((shot) => shot.start), video.name.replace(/\.[^.]+$/, ""));
+      const present = frames.filter((frame): frame is File => frame !== null);
+      const uploaded = present.length > 0 ? await uploadFiles(present) : [];
+      let cursor = 0;
+      const shotFrames: ShotFrame[] = shots.map((shot, index) => ({
+        start: shot.start,
+        end: shot.end,
+        image: frames[index] ? uploaded[cursor++] ?? null : null,
+      }));
+      setMasterPromptState(masterPrompt);
+      setMasterSettings(settings);
+      setShotFrames(shotFrames);
+      setVideoPrompt(masterPrompt);
+      setStartImage(shotFrames[0]?.image ?? null);
+      setSourceVideo(sendReference ? video : null);
+      setStage("");
+      router.push("/create/video");
+    } catch (sendError) {
+      setStage("");
+      setError(sendError instanceof Error ? sendError.message : "동영상 생성 화면으로 보내지 못했습니다.");
+    } finally {
+      setSending(false);
+    }
+  }
 
   async function copy() {
     try {
@@ -129,6 +207,14 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
                 ? "이 모델은 동영상을 직접 봅니다."
                 : `이 모델에는 동영상에서 시간 순으로 뽑은 프레임(최대 ${Math.min(MAX_TOTAL_FRAMES, writerPolicy.image.max)}장)을 보냅니다.`
               : null}
+            {writerReady ? (
+              <>
+                {" "}
+                {writerPolicy.audio.allowed
+                  ? "음성도 들을 수 있어 대사를 원문 그대로 받아 적고 입모양 맞춤 지시를 넣습니다."
+                  : "이 모델은 음성을 듣지 못해 대사는 확인할 수 없습니다(음성 입력 지원 모델을 고르면 대사·입모양까지 반영됩니다)."}
+              </>
+            ) : null}
           </div>
         </div>
         <div>
@@ -190,7 +276,19 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
               >
                 프롬프트로 저장
               </button>
+              <button type="button" onClick={sendToVideo} disabled={running || sending || !masterPrompt || !video}>
+                {sending ? "보내는 중…" : "동영상 생성 화면으로 보내기"}
+              </button>
             </div>
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, marginTop: 8 }}>
+              <input type="checkbox" checked={sendReference} onChange={(event) => setSendReference(event.target.checked)} />
+              참조 동영상도 함께 보내기 (참조 동영상을 받는 모델에서만 전송됩니다 — 예: Seedance reference-to-video)
+            </label>
+            <p className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
+              보내면 첫 프레임이 시작 이미지로, 장면별 첫 프레임과 길이·비율·해상도·네거티브 프롬프트·모션 강도가 동영상 생성 화면에
+              자동으로 채워집니다(선택한 모델이 지원하는 설정만).
+              {audioMode === "none" ? " 이번 결과는 음성 없이 작성되어 대사가 빠져 있을 수 있습니다." : ""}
+            </p>
           </div>
         ) : null}
       </div>
