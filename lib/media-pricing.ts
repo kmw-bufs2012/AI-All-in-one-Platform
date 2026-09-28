@@ -156,7 +156,7 @@ export const MEDIA_PRICING_RULES: PricingRule[] = [
     vendor: "xAI",
     label: "Grok Imagine Image",
     kind: "image",
-    match: /^grok-imagine-image$/,
+    match: /grok-imagine-image(?!-(2|quality))/,
     price: () => ({ usd: 0.02, basis: "장당 $0.02" }),
     source: "x.ai/api/imagine (2026)",
   },
@@ -205,7 +205,7 @@ export const MEDIA_PRICING_RULES: PricingRule[] = [
     vendor: "Alibaba (Qwen)",
     label: "Qwen-Image 3.0 Pro",
     kind: "image",
-    match: /qwen-image-3-pro/,
+    match: /qwen-image-3(-0)?-pro/,
     price: (ctx) => {
       const big = ctx.width && ctx.height ? ctx.width * ctx.height > 2_250_000 : ctx.tier === "2k" || ctx.tier === "4k";
       return { usd: big ? 0.075 : 0.04, basis: big ? "2K $0.075" : "1K $0.04" };
@@ -216,7 +216,7 @@ export const MEDIA_PRICING_RULES: PricingRule[] = [
     vendor: "Alibaba (Qwen)",
     label: "Qwen-Image 3.0",
     kind: "image",
-    match: /qwen-image-3$/,
+    match: /qwen-image-3(-0)?(?!-?\d|-?pro)/,
     price: () => ({ usd: 0.03, basis: "장당 $0.03" }),
     source: "Alibaba Qwen Cloud 단가 — orcarouter.ai·tech-insider.org 2026 인용",
   },
@@ -224,7 +224,7 @@ export const MEDIA_PRICING_RULES: PricingRule[] = [
     vendor: "Alibaba (Qwen)",
     label: "Qwen-Image 2.0 Pro",
     kind: "image",
-    match: /qwen-image-2-pro/,
+    match: /qwen-image-2(-0)?-pro/,
     price: () => ({ usd: 0.075, basis: "장당 $0.075" }),
     source: "Alibaba Model Studio 국제 단가 — therundown.ai 2026 인용",
   },
@@ -232,7 +232,7 @@ export const MEDIA_PRICING_RULES: PricingRule[] = [
     vendor: "Alibaba (Qwen)",
     label: "Qwen-Image 2.0",
     kind: "image",
-    match: /qwen-image-2$/,
+    match: /qwen-image-2(-0)?(?!-?\d|-?pro)/,
     price: () => ({ usd: 0.035, basis: "장당 $0.035" }),
     source: "Alibaba Model Studio 국제 단가 — therundown.ai 2026 인용",
   },
@@ -333,7 +333,7 @@ export const MEDIA_PRICING_RULES: PricingRule[] = [
     {
       vendor: "ByteDance",
       label: "Seedance 2.5 / 2.0",
-      match: /seedance-2-(5|0)-(text|image|reference)/,
+      match: /seedance-?2-(5|0)(?!\d)/,
       defaultSeconds: 5,
       source: "BytePlus ModelArk 동영상 토큰 $10.70/1M·토큰 공식 — anikuku.com·cellcog.ai 2026 인용",
       note: "Fast·Mini 변형의 단가는 확인하지 못했습니다.",
@@ -464,11 +464,24 @@ export function estimateMediaCost(
   kind: "image" | "video",
   modelId: string,
   params: Record<string, unknown>,
-  extra: { resolution?: string | null } = {},
+  extra: { resolution?: string | null; name?: string | null } = {},
 ): MediaEstimate | null {
-  const id = modelId.toLowerCase();
-  const rule = MEDIA_PRICING_RULES.find((item) => item.kind === kind && item.match.test(id));
+  /*
+   * NanoGPT 모델 ID·이름은 "qwen/qwen-image-3.0", "Seedance 2.0 Fast Spicy"처럼
+   * 표기가 제각각이라, 원래 ID와 함께 점·밑줄·공백·슬래시를 "-"로 바꾼 형태와
+   * 이름도 같이 비교합니다.
+   */
+  const normalize = (value: string) => value.toLowerCase().replace(/[\s._/]+/g, "-");
+  const candidates = [modelId.toLowerCase(), normalize(modelId), extra.name ? normalize(extra.name) : ""]
+    .filter(Boolean)
+    .flatMap((value) => [value, value.replace(/^[^/]*\//, "")]);
+  const rule = MEDIA_PRICING_RULES.find((item) => item.kind === kind && candidates.some((value) => item.match.test(value)));
   if (!rule) return null;
+  // 기본 모델 규칙에 맞은 Fast·Mini·Lite 등 변형은 공식 단가를 따로 확인하지 못했으므로 알려 줍니다.
+  const variant = candidates.join(" ").match(/\b(fast|mini|lite|spicy|turbo|flash)\b/);
+  const variantNote = variant && !rule.label.toLowerCase().includes(variant[1])
+    ? `이 모델(${variant[1]} 변형)의 공식 단가는 확인하지 못해 ${rule.label} 기본 단가로 계산했습니다. 실제 청구액과 다를 수 있습니다.`
+    : undefined;
   const ctx = buildPricingContext(params, extra);
   const result = rule.price(ctx);
   if (!result) return null;
@@ -484,6 +497,6 @@ export function estimateMediaCost(
     seconds: kind === "video" ? (ctx.seconds ?? rule.defaultSeconds ?? 5) : null,
     basis: result.basis,
     source: rule.source,
-    note: rule.note,
+    note: variantNote ?? rule.note,
   };
 }

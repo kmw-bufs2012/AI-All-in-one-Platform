@@ -375,6 +375,10 @@ export default function VideoPage() {
           <MediaCostEstimate
             kind="video"
             modelId={models.selected?.id}
+            modelName={models.selected?.name}
+            prompt={prompt}
+            referenceImages={(startImage ? 1 : 0) + (endFrameImage ? 1 : 0)}
+            catalogInputPer1M={models.selected?.pricing?.inputPer1M ?? null}
             params={paramValues}
             resolution={null}
             multiplier={Number(batchCount) || 1}

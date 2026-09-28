@@ -253,6 +253,10 @@ export default function ImagePage() {
           <MediaCostEstimate
             kind="image"
             modelId={models.selected?.id}
+            modelName={models.selected?.name}
+            prompt={prompt}
+            referenceImages={refs.length}
+            catalogInputPer1M={models.selected?.pricing?.inputPer1M ?? null}
             params={{ ...paramValues, n: batchCount }}
             resolution={activeResolution === DEFAULT_RESOLUTION ? null : activeResolution}
             catalogUnitPrice={models.selected?.pricing?.perRequest ?? null}
