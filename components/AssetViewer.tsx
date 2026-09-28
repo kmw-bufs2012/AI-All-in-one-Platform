@@ -5,7 +5,7 @@ import { formatFileSize } from "@/components/studio-ui";
 import { extractVideoFrames, type AttachedFile } from "@/lib/client-api";
 
 /*
- * 라이브러리 상세 보기. 왼쪽에 이미지·영상 미리보기, 오른쪽에 작성자·프롬프트·
+ * 라이브러리 상세 보기. 왼쪽에 이미지·동영상 미리보기, 오른쪽에 작성자·프롬프트·
  * 참조 미디어·정보·태그와 작업 버튼을 보여 줍니다. 좌우 화살표(또는 ← →
  * 키)로 같은 목록의 이전·다음 항목으로 이동합니다.
  */
@@ -300,7 +300,7 @@ export function AssetViewer({
           {asset.kind === "image" ? (
             <>
               <button type="button" className="viewer-primary" onClick={() => actions.onMakeVideo(asset)}>
-                이 이미지로 영상 만들기
+                이 이미지로 동영상 만들기
               </button>
               <button type="button" className="secondary" onClick={() => actions.onRemakeImage(asset)}>
                 참조 이미지로 다시 만들기

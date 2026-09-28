@@ -55,7 +55,7 @@ Output format (exactly):
 1. The master prompt in English inside a single \`\`\`text code block.
 2. After the code block, a short section in Korean titled "설정 참고" listing the recommended UI settings (duration, aspect ratio, resolution) and anything that could not be reproduced.`;
 
-/** 비전(LMM) 모델에 직접 영상을 보여 주고 마스터 프롬프트를 받을 때. */
+/** 비전(LMM) 모델에 직접 동영상을 보여 주고 마스터 프롬프트를 받을 때. */
 export function buildDirectPrompt(meta: VideoMeta, userNote: string): string {
   return `${MASTER_RULES}
 

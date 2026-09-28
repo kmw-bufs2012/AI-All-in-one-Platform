@@ -397,7 +397,7 @@ export function recordJob(payload: Record<string, unknown>): void {
 }
 
 /*
- * 완료된 이미지·영상 결과를 이 기기 보관함(lib/local-vault.ts)에 자동 저장합니다.
+ * 완료된 이미지·동영상 결과를 이 기기 보관함(lib/local-vault.ts)에 자동 저장합니다.
  * 실패해도 생성 흐름에는 영향을 주지 않습니다.
  */
 function autoSaveToVault(payload: Record<string, unknown>): void {

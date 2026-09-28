@@ -6,7 +6,7 @@ export const metadata: Metadata = {
     default: "AI 올인원 플랫폼",
     template: "%s · AI 올인원 플랫폼",
   },
-  description: "채팅, 이미지, 영상, 음성 생성을 하나의 스튜디오에서 다루는 AI 작업 공간입니다.",
+  description: "채팅, 이미지, 동영상, 음성 생성을 하나의 스튜디오에서 다루는 AI 작업 공간입니다.",
   applicationName: "AI 올인원 플랫폼",
 };
 

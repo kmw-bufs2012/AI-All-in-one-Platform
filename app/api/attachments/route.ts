@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
     else if (kind === "doc") docCount += 1;
     else {
       return NextResponse.json({
-        error: `${file.name} 파일은 지원되지 않는 형식입니다. 이미지, 영상, 오디오, 문서(txt/md/pdf)만 업로드할 수 있습니다.`,
+        error: `${file.name} 파일은 지원되지 않는 형식입니다. 이미지, 동영상, 오디오, 문서(txt/md/pdf)만 업로드할 수 있습니다.`,
       }, { status: 400 });
     }
   }

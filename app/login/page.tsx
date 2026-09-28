@@ -64,13 +64,13 @@ export default function LoginPage() {
             <br />
             문장으로 적기만 하면 됩니다.
           </h2>
-          <p>채팅·이미지·영상·음성을 한 곳에서 만들고, 결과는 라이브러리에 차곡차곡 모입니다.</p>
+          <p>채팅·이미지·동영상·음성을 한 곳에서 만들고, 결과는 라이브러리에 차곡차곡 모입니다.</p>
         </div>
 
         <div className="auth-tags">
           <span className="auth-tag">채팅</span>
           <span className="auth-tag">이미지</span>
-          <span className="auth-tag">영상</span>
+          <span className="auth-tag">동영상</span>
           <span className="auth-tag">음성</span>
           <span className="auth-tag">라이브러리</span>
         </div>

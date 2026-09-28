@@ -16,7 +16,7 @@ import {
  * 동영상 → Seedance 2.0 Mini 복붙용 마스터 프롬프트 생성기.
  *
  * 동영상을 이해할 수 있는 멀티모달(LMM) 모델만 목록에 표시합니다
- * (isVideoCapableModel). 모델이 동영상 직접 입력을 지원하면 영상을 그대로,
+ * (isVideoCapableModel). 모델이 동영상 직접 입력을 지원하면 동영상을 그대로,
  * 아니면 시간 순 프레임으로 보여 주고 한 번에 마스터 프롬프트를 생성합니다.
  */
 export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: string) => Promise<void> }) {
@@ -58,7 +58,7 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
     }
   }
 
-  /** 정책에 맞춰 영상을 video_url(직접) 또는 프레임으로 준비합니다. */
+  /** 정책에 맞춰 동영상을 video_url(직접) 또는 프레임으로 준비합니다. */
   async function videoPayload(policy: ReturnType<typeof resolveChatAttachmentPolicy>, attached: AttachedFile) {
     if (policy.videoNative) {
       return { attachments: { videos: [attached.id] }, frames: [], frameGroups: [] };
@@ -77,7 +77,7 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
     setRunning(true);
     try {
       const meta = await readVideoMeta(video.url, video.name);
-      setStage(`${writer.selected.name}이(가) 영상을 보고 마스터 프롬프트를 작성하고 있습니다…`);
+      setStage(`${writer.selected.name}이(가) 동영상을 보고 마스터 프롬프트를 작성하고 있습니다…`);
       const payload = await videoPayload(writerPolicy, video);
       await streamChat(
         {
@@ -112,8 +112,8 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
     <div className="panel" style={{ marginBottom: 16 }}>
       <h2 style={{ fontSize: 15, marginBottom: 6 }}>동영상 → Seedance 2.0 Mini 마스터 프롬프트</h2>
       <p className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>
-        동영상을 첨부하면 같은 영상을 다시 만들 수 있는 복붙용 프롬프트를 선택한 모델로 생성합니다. Seedance 2.0 Mini는
-        한 번에 최대 15초까지 생성하므로, 더 긴 영상은 앞 15초를 기준으로 작성합니다.
+        동영상을 첨부하면 같은 동영상을 다시 만들 수 있는 복붙용 프롬프트를 선택한 모델로 생성합니다. Seedance 2.0 Mini는
+        한 번에 최대 15초까지 생성하므로, 더 긴 동영상은 앞 15초를 기준으로 작성합니다.
       </p>
       <div className="stack">
         <div>

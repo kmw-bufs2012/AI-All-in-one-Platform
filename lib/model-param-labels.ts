@@ -1,5 +1,5 @@
 /*
- * 이미지·영상 생성 모델의 supported_parameters 키/값을 한국어로 표시하기 위한
+ * 이미지·동영상 생성 모델의 supported_parameters 키/값을 한국어로 표시하기 위한
  * 사전입니다. NanoGPT 공식 문서와 각 모델 제공사(Kling, Veo, Hunyuan,
  * Seedance, Ideogram, Flux 등)의 공개 문서에서 확인한 값만 담았습니다. 사전에
  * 없는 키·값은 원문 그대로 보여줍니다(근거 없는 번역을 지어내지 않기 위함).
@@ -61,7 +61,7 @@ export const PARAM_VALUE_LABELS: Record<string, Record<string, string>> = {
   },
   style: {
     general: "일반(프롬프트로 스타일 지정)",
-    common: "일반 영상",
+    common: "일반 동영상",
     // Ideogram 공식 문서(style_type)에서 확인된 정확한 값입니다.
     // 출처: docs/model-capability-research.md, docs.ideogram.ai
     auto: "자동(프롬프트에 맞춰 선택)",
@@ -102,9 +102,9 @@ export const PARAM_VALUE_LABELS: Record<string, Record<string, string>> = {
     natural: "자연스러운 색감",
     vivid: "강렬한 색감",
     none: "스타일 없음(원본)",
-    ugc: "사용자 제작 영상(UGC)",
+    ugc: "사용자 제작 동영상(UGC)",
     short_series: "숏폼 드라마",
-    aigc: "AI 생성 영상",
+    aigc: "AI 생성 동영상",
     old_film: "기록·고전 필름",
   },
   rendering_speed: {

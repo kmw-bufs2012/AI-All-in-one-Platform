@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
   const kind = kindFromFile(name, mime);
   if (!kind) {
     return NextResponse.json({
-      error: `${name} 파일은 지원되지 않는 형식입니다. 이미지, 영상, 오디오, 문서(txt/md/pdf)만 업로드할 수 있습니다.`,
+      error: `${name} 파일은 지원되지 않는 형식입니다. 이미지, 동영상, 오디오, 문서(txt/md/pdf)만 업로드할 수 있습니다.`,
     }, { status: 400 });
   }
 

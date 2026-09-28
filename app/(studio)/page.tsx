@@ -15,7 +15,7 @@ export default function HomePage() {
           <br />
           <span className="grad">만들어 볼까요</span>?
         </h1>
-        <p>채팅부터 이미지, 영상, 음성까지. 하나의 작업 공간에서 만들고 라이브러리에 모아 둡니다.</p>
+        <p>채팅부터 이미지, 동영상, 음성까지. 하나의 작업 공간에서 만들고 라이브러리에 모아 둡니다.</p>
       </section>
 
       <div className="section-head">
@@ -62,7 +62,7 @@ export default function HomePage() {
               </span>
               <span className="quick-sub">
                 {entry.href === "/library"
-                  ? "생성한 이미지·영상·음성 모아 보기"
+                  ? "생성한 이미지·동영상·음성 모아 보기"
                   : entry.href === "/history"
                     ? "사용량과 비용까지 남은 기록"
                     : "자주 쓰는 프롬프트 저장"}
