@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { retrieveVideo, politeNanoGptError, readJson } from "@/lib/nanogpt";
-import { extractStatus, extractCost, extractVideoUrl, isFailureStatus, isVideoResponse } from "@/lib/extract";
+import { extractStatus, extractCost, extractProgress, extractVideoUrl, isFailureStatus, isVideoResponse } from "@/lib/extract";
 import { saveGeneratedFile } from "@/lib/storage";
 
 /*
@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ status: "completed", url: videoUrl, cost: normalizedCost });
     }
 
-    return NextResponse.json({ status, cost: normalizedCost, raw: parsed });
+    return NextResponse.json({ status, progress: extractProgress(parsed), cost: normalizedCost, raw: parsed });
   } catch (error) {
     const message = error instanceof Error ? error.message : "NanoGPT 동영상 결과 확인에 실패했습니다.";
     const status = error instanceof Error && "status" in error ? Number((error as { status?: number }).status ?? 502) : 502;

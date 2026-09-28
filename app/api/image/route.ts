@@ -27,6 +27,8 @@ export async function POST(request: NextRequest) {
     resolution?: unknown;
     n?: unknown;
     params?: unknown;
+    officialParams?: unknown;
+    officialResolution?: unknown;
   };
   try {
     body = await request.json();
@@ -88,9 +90,34 @@ export async function POST(request: NextRequest) {
   );
   Object.assign(payload, extraParams);
 
+  /*
+   * 카탈로그에는 없지만 제작사 공식 문서로 확인한 설정(lib/image-settings-overlay.ts).
+   * NanoGPT가 받지 않을 수 있으므로, 4xx로 거부되면 이 설정만 빼고 한 번 더
+   * 시도해 생성 자체는 막히지 않게 합니다. 뺀 설정은 응답에 알려 줍니다.
+   */
+  const officialParams = sanitizeExtraParams(
+    body.officialParams,
+    new Set(["model", "prompt", "input_references", "resolution", "n", "size", "sizes"]),
+  );
+  for (const [key, value] of Object.entries(officialParams)) {
+    if (value === "true") officialParams[key] = true;
+    else if (value === "false") officialParams[key] = false;
+  }
+  const officialKeys = Object.keys(officialParams);
+  if (body.officialResolution === true && typeof payload.resolution === "string") officialKeys.push("resolution");
+  Object.assign(payload, officialParams);
+  let droppedParams: string[] = [];
+
   try {
-    const upstream = await generateImage(payload);
-    const bodyText = await readJson(upstream);
+    let upstream = await generateImage(payload);
+    let bodyText = await readJson(upstream);
+    if (!upstream.ok && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 401 && upstream.status !== 402 && officialKeys.length > 0) {
+      const retryPayload = { ...payload };
+      for (const key of officialKeys) delete retryPayload[key];
+      droppedParams = officialKeys;
+      upstream = await generateImage(retryPayload);
+      bodyText = await readJson(upstream);
+    }
     if (!upstream.ok) {
       throw politeNanoGptError(upstream, bodyText, "NanoGPT 이미지 생성에 실패했습니다.");
     }
@@ -114,6 +141,7 @@ export async function POST(request: NextRequest) {
       ok: true,
       urls,
       count: urls.length,
+      droppedParams,
       cost: cost ? { amount: cost.amount, currency: cost.currency ?? "USD" } : null,
     });
   } catch (error) {

@@ -8,13 +8,16 @@ import {
 } from "@/components/DynamicParams";
 import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
-import { AttachStrip, FileChip, ModelChip, ModelDetail, NewSessionButton, SendButton } from "@/components/studio-ui";
+import { AttachStrip, FileChip, ModelChip, ModelDetail, NewSessionButton, SelectChip, SendButton } from "@/components/studio-ui";
+import { GenerationTile, useNow, type GenerationJob } from "@/components/GenerationProgress";
 import { MAX_VIDEO_BYTES, needsVideoCompression, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { resolveVideoAttachmentPolicy } from "@/lib/attachment-policy";
 import { filterSupportedParamValues } from "@/lib/models";
 
 const POLL_INTERVAL_MS = 5000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
+/* 한 번에 동시에 만들 수 있는 최대 개수(요청을 나란히 보냅니다). */
+const MAX_PARALLEL = 4;
 
 interface VideoResult {
   url: string;
@@ -31,14 +34,21 @@ export default function VideoPage() {
   const [results, setResults] = useStudioState<VideoResult[]>("video:results", []);
   const [busy, setBusy] = useState(false);
   const [compressingVideo, setCompressingVideo] = useState(false);
-  const [status, setStatus] = useState("");
+  const [jobs, setJobs] = useState<GenerationJob[]>([]);
+  const [batchCount, setBatchCount] = useStudioState<string>("video:batchCount", "1");
+  const now = useNow(jobs.length > 0);
   const [estimate, setEstimate] = useState<{ amount: number; currency: string | null; actual: boolean } | null>(null);
   const [error, setError] = useState("");
-  const pollRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; startedAt: number }>({ timer: null, startedAt: 0 });
+  const timersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
+  const mountedRef = useRef(true);
 
   useEffect(() => {
+    mountedRef.current = true;
+    const timers = timersRef.current;
     return () => {
-      if (pollRef.current.timer) clearTimeout(pollRef.current.timer);
+      mountedRef.current = false;
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
     };
   }, []);
 
@@ -128,9 +138,13 @@ export default function VideoPage() {
     setSourceVideo(null);
     setEndFrameImage(null);
     setResults([]);
-    setStatus("");
+    setJobs([]);
     setEstimate(null);
     setError("");
+  }
+
+  function updateJob(id: string, patch: Partial<GenerationJob>) {
+    setJobs((prev) => prev.map((job) => (job.id === id ? { ...job, ...patch } : job)));
   }
 
   async function generate() {
@@ -143,120 +157,120 @@ export default function VideoPage() {
     }
     setError("");
     setBusy(true);
+    const count = Math.max(1, Math.min(MAX_PARALLEL, Number(batchCount) || 1));
+    // 동영상 길이에 비례해 보통 걸리는 시간을 잡습니다(추정 진행률용).
+    const seconds = Number(paramValues.duration ?? paramValues.seconds) || 6;
+    const expectedMs = Math.min(8 * 60 * 1000, 60 * 1000 + seconds * 15 * 1000);
+    const startedAt = Date.now();
+    const batch: GenerationJob[] = Array.from({ length: count }, (_, index) => ({
+      id: `${startedAt}-${index}`,
+      startedAt,
+      expectedMs,
+      reported: null,
+      status: "요청 중",
+      state: "running",
+    }));
+    setJobs(batch);
+    // 카탈로그 단가로 우선 어림값을 보여 주고, 실제 응답에 청구액이 실리면
+    // 그 값으로 바꿉니다(NanoGPT 공식 문서: 응답마다 cost 필드가 실제 청구액).
+    setEstimate(unitPrice !== null ? { amount: unitPrice * count, currency, actual: false } : null);
+    const attachments = [startImage, sourceVideo, endFrameImage].filter((item): item is AttachedFile => Boolean(item));
+    const errors: string[] = [];
 
-    // 카탈로그 단가로 우선 어림값을 보여 주고, 실제 요청·완료 응답에 청구액이
-    // 실리면 그 값으로 갈아 끼웁니다(NanoGPT 공식 문서: 응답마다 cost 필드가
-    // 실제 청구액을 담아 옵니다).
-    let quote = unitPrice !== null ? { amount: unitPrice, currency, actual: false } : null;
-    setEstimate(quote);
-
-    try {
-      setStatus("동영상 생성을 요청하고 있습니다…");
-      const queueResponse = await fetch("/api/video", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+    const runJob = async (job: GenerationJob) => {
+      let quote = unitPrice !== null ? { amount: unitPrice, currency, actual: false } : null;
+      const record = (state: "completed" | "failed", url: string | null) =>
+        recordJob({
+          mode: "video",
           model: model.id,
           prompt: text,
-          startImageId: supportsStartImage ? startImage?.id : undefined,
-          sourceVideoId: supportsSourceVideo ? sourceVideo?.id : undefined,
-          endImageId: supportsEndFrame ? endFrameImage?.id : undefined,
-          params: filterSupportedParamValues(model.videoParams, paramValues),
-        }),
-      });
-      const queueBody = await queueResponse.json().catch(() => ({}));
-      if (!queueResponse.ok) throw new Error(queueBody.error || "동영상 생성 요청에 실패했습니다.");
+          attachments,
+          usage: null,
+          unitPrice: model.pricing,
+          cost: quote?.amount ?? null,
+          currency: quote?.currency ?? null,
+          costSource: quote?.actual ? "actual" : quote ? "estimated" : null,
+          status: state,
+          result: url ? { kind: "video", urls: [url] } : null,
+        });
+      try {
+        const queueResponse = await fetch("/api/video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: model.id,
+            prompt: text,
+            startImageId: supportsStartImage ? startImage?.id : undefined,
+            sourceVideoId: supportsSourceVideo ? sourceVideo?.id : undefined,
+            endImageId: supportsEndFrame ? endFrameImage?.id : undefined,
+            params: filterSupportedParamValues(model.videoParams, paramValues),
+          }),
+        });
+        const queueBody = await queueResponse.json().catch(() => ({}));
+        if (!queueResponse.ok) throw new Error(queueBody.error || "동영상 생성 요청에 실패했습니다.");
+        if (queueBody.cost) quote = { amount: queueBody.cost.amount, currency: queueBody.cost.currency ?? null, actual: true };
+        const runId: string = queueBody.runId;
+        updateJob(job.id, { status: "동영상 만드는 중" });
 
-      if (queueBody.cost) {
-        quote = { amount: queueBody.cost.amount, currency: queueBody.cost.currency ?? null, actual: true };
-        setEstimate(quote);
-      }
-
-      const runId: string = queueBody.runId;
-      pollRef.current = { timer: null, startedAt: Date.now() };
-      setStatus("동영상이 만들어지고 있습니다. 몇 분 정도 걸릴 수 있습니다…");
-
-      await new Promise<void>((resolve) => {
-        const poll = async () => {
-          try {
-            const retrieveResponse = await fetch(
-              `/api/video/retrieve?run_id=${encodeURIComponent(runId)}`,
-              { cache: "no-store" },
-            );
-            const retrieveBody = await retrieveResponse.json().catch(() => ({}));
-            if (!retrieveResponse.ok) throw new Error(retrieveBody.error || "동영상 결과 확인에 실패했습니다.");
-
-            if (retrieveBody.status === "completed") {
-              const url: string | null = retrieveBody.url ?? null;
-              if (url) setResults((prev) => [{ url, prompt: text }, ...prev]);
-              setStatus("");
-              const finalCost = retrieveBody.cost
-                ? { amount: retrieveBody.cost.amount, currency: retrieveBody.cost.currency ?? null, actual: true }
-                : quote;
-              setEstimate(finalCost);
-              recordJob({
-                mode: "video",
-                model: model.id,
-                prompt: text,
-                attachments: [startImage, sourceVideo, endFrameImage].filter((item): item is AttachedFile => Boolean(item)),
-                usage: null,
-                unitPrice: model.pricing,
-                cost: finalCost?.amount ?? null,
-                currency: finalCost?.currency ?? null,
-                costSource: finalCost?.actual ? "actual" : finalCost ? "estimated" : null,
-                status: "completed",
-                result: url ? { kind: "video", urls: [url] } : null,
-              });
+        for (;;) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+              timersRef.current.delete(timer);
               resolve();
-              return;
-            }
-            if (retrieveBody.status === "failed") {
-              recordJob({
-                mode: "video",
-                model: model.id,
-                prompt: text,
-                attachments: [startImage, sourceVideo, endFrameImage].filter((item): item is AttachedFile => Boolean(item)),
-                usage: null,
-                unitPrice: model.pricing,
-                cost: quote?.amount ?? null,
-                currency: quote?.currency ?? null,
-                costSource: quote?.actual ? "actual" : quote ? "estimated" : null,
-                status: "failed",
-                result: null,
-              });
-              throw new Error("동영상 생성이 거부되거나 실패했습니다.");
-            }
-            if (Date.now() - pollRef.current.startedAt > POLL_TIMEOUT_MS) {
-              throw new Error("동영상 생성이 시간 내에 끝나지 않았습니다. 잠시 후 작업 기록에서 다시 확인해 주세요.");
-            }
-            pollRef.current.timer = setTimeout(poll, POLL_INTERVAL_MS);
-          } catch (pollError) {
-            setStatus("");
-            setError(pollError instanceof Error ? pollError.message : "동영상 생성에 실패했습니다.");
-            pollRef.current.timer = null;
-            resolve();
+            }, POLL_INTERVAL_MS);
+            timersRef.current.add(timer);
+          });
+          if (!mountedRef.current) return;
+          const retrieveResponse = await fetch(`/api/video/retrieve?run_id=${encodeURIComponent(runId)}`, { cache: "no-store" });
+          const retrieveBody = await retrieveResponse.json().catch(() => ({}));
+          if (!retrieveResponse.ok) throw new Error(retrieveBody.error || "동영상 결과 확인에 실패했습니다.");
+          if (retrieveBody.cost) {
+            quote = { amount: retrieveBody.cost.amount, currency: retrieveBody.cost.currency ?? null, actual: true };
           }
-        };
-        pollRef.current.timer = setTimeout(poll, POLL_INTERVAL_MS);
-      });
-    } catch (generateError) {
-      const message = generateError instanceof Error ? generateError.message : "동영상 생성에 실패했습니다.";
-      setStatus("");
-      setError(message);
-      recordJob({
-        mode: "video",
-        model: model.id,
-        prompt: text,
-        attachments: [startImage, sourceVideo, endFrameImage].filter((item): item is AttachedFile => Boolean(item)),
-        usage: null,
-        unitPrice: model.pricing,
-        cost: quote?.amount ?? null,
-        currency: quote?.currency ?? null,
-        costSource: quote?.actual ? "actual" : quote ? "estimated" : null,
-        status: "failed",
-        result: null,
-      });
+          if (retrieveBody.status === "completed") {
+            const url: string | null = retrieveBody.url ?? null;
+            if (url) setResults((prev) => [{ url, prompt: text }, ...prev]);
+            updateJob(job.id, { state: "done", status: "완료", reported: 100 });
+            record("completed", url);
+            return quote;
+          }
+          if (retrieveBody.status === "failed") throw new Error("동영상 생성이 거부되거나 실패했습니다.");
+          const reported = typeof retrieveBody.progress === "number" ? retrieveBody.progress : null;
+          const label = String(retrieveBody.status || "").toLowerCase();
+          updateJob(job.id, {
+            reported,
+            status: /queue|pending|wait/.test(label) ? "대기열에서 기다리는 중" : "동영상 만드는 중",
+          });
+          if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+            throw new Error("동영상 생성이 시간 내에 끝나지 않았습니다. 잠시 후 작업 기록에서 다시 확인해 주세요.");
+          }
+        }
+      } catch (jobError) {
+        const message = jobError instanceof Error ? jobError.message : "동영상 생성에 실패했습니다.";
+        errors.push(message);
+        updateJob(job.id, { state: "failed", status: message });
+        record("failed", null);
+        return quote;
+      }
+    };
+
+    try {
+      const quotes = await Promise.all(batch.map((job) => runJob(job)));
+      const known = quotes.filter((item): item is NonNullable<typeof item> => Boolean(item));
+      if (known.length > 0) {
+        setEstimate({
+          amount: known.reduce((sum, item) => sum + item.amount, 0),
+          currency: known[0].currency,
+          actual: known.every((item) => item.actual),
+        });
+      }
+      if (errors.length > 0) {
+        setError(count > 1 ? `${count}개 중 ${errors.length}개 실패: ${errors[0]}` : errors[0]);
+      }
     } finally {
+      // 실패한 타일은 잠시 보여 준 뒤 지웁니다.
+      setJobs((prev) => prev.filter((job) => job.state === "failed"));
+      setTimeout(() => setJobs([]), 6000);
       setBusy(false);
     }
   }
@@ -279,18 +293,27 @@ export default function VideoPage() {
             modelId={models.selected?.id}
             params={paramValues}
             resolution={null}
+            multiplier={Number(batchCount) || 1}
             catalogUnitPrice={models.selected?.pricing?.perRequest ?? null}
             catalogCurrency={models.selected?.pricing?.currency ?? null}
           />
           {policy.note ? <p className="muted" style={{ fontSize: 11.5, marginTop: -8, marginBottom: 12 }}>{policy.note}</p> : null}
           {durationNote ? <p className="muted" style={{ fontSize: 11.5, marginTop: -8, marginBottom: 12 }}>{durationNote}</p> : null}
 
-          {results.length === 0 ? (
+          {jobs.length > 0 ? (
+            <div className="result-grid wide" style={{ marginBottom: 18 }}>
+              {jobs.map((job) => (
+                <GenerationTile key={job.id} job={job} now={now} wide />
+              ))}
+            </div>
+          ) : null}
+
+          {results.length === 0 && jobs.length === 0 ? (
             <div className="studio-hero">
               <h1>동영상 만들기</h1>
               <p>장면과 움직임을 문장으로 적어 보세요. 시작 이미지를 얹으면 그 장면에서 이어집니다.</p>
             </div>
-          ) : (
+          ) : results.length === 0 ? null : (
             <>
               <div className="section-head">
                 <h2>생성 결과</h2>
@@ -309,11 +332,6 @@ export default function VideoPage() {
             </>
           )}
 
-          {busy ? (
-            <div className="progress-note" style={{ marginTop: 18 }}>
-              <span className="spinner" /> {status}
-            </div>
-          ) : null}
           {estimate ? (
             <div className="cost-line">
               {estimate.actual ? "청구된 비용" : "예상 비용"}: {estimate.currency ?? "USD"} {estimate.amount.toFixed(4)}
@@ -378,6 +396,17 @@ export default function VideoPage() {
                 title="확장·편집할 원본 동영상 첨부"
               />
             ) : null}
+            <SelectChip
+              icon="quality"
+              title="같은 설정으로 동시에 만들 개수(요청을 나란히 보냅니다)"
+              value={batchCount}
+              onChange={setBatchCount}
+              disabled={busy}
+              options={Array.from({ length: MAX_PARALLEL }, (_, index) => ({
+                value: String(index + 1),
+                label: `${index + 1}개 동시 생성`,
+              }))}
+            />
             <span className="dock-spacer" />
             {models.selected && !supportsStartImage && startImage ? (
               <span className="muted" style={{ fontSize: 11.5 }}>

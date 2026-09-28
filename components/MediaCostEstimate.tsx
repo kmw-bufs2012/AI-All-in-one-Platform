@@ -14,7 +14,10 @@ export function MediaCostEstimate({
   resolution,
   catalogUnitPrice,
   catalogCurrency,
+  multiplier = 1,
 }: {
+  /** 동영상을 여러 개 동시에 만들 때의 개수. */
+  multiplier?: number;
   kind: "image" | "video";
   modelId: string | null | undefined;
   params: Record<string, unknown>;
@@ -23,9 +26,17 @@ export function MediaCostEstimate({
   catalogCurrency: string | null;
 }) {
   if (!modelId) return null;
-  const estimate = estimateMediaCost(kind, modelId, params, { resolution });
+  const single = estimateMediaCost(kind, modelId, params, { resolution });
+  const estimate = single && multiplier > 1
+    ? {
+        ...single,
+        totalUsd: single.totalUsd * multiplier,
+        totalTokens: single.totalTokens !== null ? single.totalTokens * multiplier : null,
+        basis: `${single.basis} × ${multiplier}개`,
+      }
+    : single;
   const count = estimate?.count ?? 1;
-  const catalogTotal = catalogUnitPrice !== null ? catalogUnitPrice * (kind === "image" ? count : 1) : null;
+  const catalogTotal = catalogUnitPrice !== null ? catalogUnitPrice * (kind === "image" ? count : multiplier) : null;
   if (!estimate && catalogTotal === null) return null;
 
   return (

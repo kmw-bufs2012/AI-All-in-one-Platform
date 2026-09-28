@@ -1,4 +1,5 @@
 import { modelDescription } from "./model-descriptions";
+import { findImageSettingsOverlay, mergeOfficialImageParams } from "./image-settings-overlay";
 import { findUncensoredFamily } from "./model-attachment-limits";
 import {
   findVideoOverlay,
@@ -59,6 +60,10 @@ export interface ExtraParam {
   max?: number;
   step?: number;
   default?: string | number | null;
+  /** "official": 카탈로그에는 없지만 제작사 공식 문서로 확인해 더한 설정. */
+  origin?: "catalog" | "official";
+  /** 설정 옆에 보여 줄 짧은 도움말. */
+  note?: string;
 }
 
 /**
@@ -145,6 +150,12 @@ export interface NormalizedModel {
   /** supported_parameters.n.max — 한 번에 생성할 수 있는 이미지 장수. */
   maxOutputImages: number;
   /** resolution·n·참조 이미지 외에 모델이 공개한 나머지 설정(비율·품질·스타일 등). */
+  /** 해상도 목록이 카탈로그가 아니라 공식 문서에서 온 경우 true. */
+  officialResolutions?: boolean;
+  /** 공식 문서상 한 요청 최대 장수(참고). */
+  officialMaxImages?: number | null;
+  /** 보강한 공식 설정의 출처. */
+  settingsSource?: string | null;
   imageParams: ExtraParam[];
 
   /* ------------------------------------------------------- 동영상 생성 모델 */
@@ -547,7 +558,10 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     "resolution", "resolutions", "size", "sizes", "n", "num_images", "numimages",
     "input_references", "imagedataurl", "imagedataurls", "image_url", "images", "imageurl",
   ]);
-  const imageParams = kind === "image" ? extractExtraParams(params, imageExclude) : [];
+  // 카탈로그가 공개하지 않은 설정은 제작사 공식 문서로 확인한 값으로 보강합니다
+  // (lib/image-settings-overlay.ts).
+  const imageOverlay = kind === "image" ? findImageSettingsOverlay(id, name) : null;
+  const imageParams = kind === "image" ? mergeOfficialImageParams(extractExtraParams(params, imageExclude), imageOverlay) : [];
 
   /*
    * 동영상 생성 입력(시작 이미지) 판정.
@@ -644,7 +658,10 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     maxInputReferences,
     referenceFormats,
     referenceMaxBytes,
-    resolutions,
+    resolutions: resolutions.length > 0 ? resolutions : (imageOverlay?.resolutions ?? []),
+    officialResolutions: resolutions.length === 0 && Boolean(imageOverlay?.resolutions?.length),
+    officialMaxImages: imageOverlay?.officialMaxImages ?? null,
+    settingsSource: imageOverlay?.source ?? null,
     defaultResolution,
     maxOutputImages: Math.max(1, maxOutputImages),
     imageParams,
