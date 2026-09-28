@@ -1,3 +1,4 @@
+import { acceptDataUrl, MISSING_ATTACHMENT_MESSAGE } from "@/lib/inline-media";
 import { NextRequest, NextResponse } from "next/server";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -27,6 +28,8 @@ export async function POST(request: NextRequest) {
     resolution?: unknown;
     n?: unknown;
     params?: unknown;
+    /** 브라우저 7일 보관 사본(id → data URL). 서버 디스크에 없을 때 대신 씁니다. */
+    inlineReferences?: unknown;
     officialParams?: unknown;
     officialResolution?: unknown;
   };
@@ -48,25 +51,37 @@ export async function POST(request: NextRequest) {
         .slice(0, HARD_REFERENCE_LIMIT)
     : [];
 
+  const inlineReferences = body.inlineReferences && typeof body.inlineReferences === "object" && !Array.isArray(body.inlineReferences)
+    ? (body.inlineReferences as Record<string, unknown>)
+    : {};
   const inputReferences: string[] = [];
+  const missing: string[] = [];
   for (const id of referenceIds) {
     let dir: string | null = null;
     try {
       dir = resolveUploadPath(path.join("attachments", id));
     } catch {
+      dir = null;
+    }
+    const entries = dir ? await readdir(dir, { withFileTypes: true }).catch(() => []) : [];
+    const entry = entries.find((item) => item.isFile());
+    if (dir && entry) {
+      const buffer = await readFile(path.join(dir, entry.name));
+      if (buffer.byteLength > MAX_REFERENCE_BYTES) {
+        return NextResponse.json({
+          error: `${entry.name} 참조 이미지가 허용 크기를 초과합니다.`,
+        }, { status: 400 });
+      }
+      inputReferences.push(`data:${mimeFromPath(entry.name)};base64,${buffer.toString("base64")}`);
       continue;
     }
-    if (!dir) continue;
-    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-    const entry = entries.find((item) => item.isFile());
-    if (!entry) continue;
-    const buffer = await readFile(path.join(dir, entry.name));
-    if (buffer.byteLength > MAX_REFERENCE_BYTES) {
-      return NextResponse.json({
-        error: `${entry.name} 참조 이미지가 허용 크기를 초과합니다.`,
-      }, { status: 400 });
-    }
-    inputReferences.push(`data:${mimeFromPath(entry.name)};base64,${buffer.toString("base64")}`);
+    // 서버 임시 저장소에 없으면 브라우저 7일 보관 사본을 씁니다(lib/inline-media.ts).
+    const inline = acceptDataUrl(inlineReferences[id], "image");
+    if (inline) inputReferences.push(inline);
+    else missing.push(id);
+  }
+  if (missing.length > 0) {
+    return NextResponse.json({ error: MISSING_ATTACHMENT_MESSAGE, missing }, { status: 409 });
   }
 
   const payload: Record<string, unknown> = { model, prompt };

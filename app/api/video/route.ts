@@ -1,3 +1,4 @@
+import { acceptDataUrl, MISSING_ATTACHMENT_MESSAGE } from "@/lib/inline-media";
 import { NextRequest, NextResponse } from "next/server";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -41,6 +42,10 @@ export async function POST(request: NextRequest) {
     startImageId?: unknown;
     sourceVideoId?: unknown;
     endImageId?: unknown;
+    /** 브라우저 7일 보관 사본. 서버 디스크에 없을 때 대신 씁니다(lib/inline-media.ts). */
+    startImageDataUrl?: unknown;
+    sourceVideoDataUrl?: unknown;
+    endImageDataUrl?: unknown;
     params?: unknown;
   };
   try {
@@ -56,13 +61,16 @@ export async function POST(request: NextRequest) {
   }
 
   const payload: Record<string, unknown> = { model, prompt };
+  const missing: string[] = [];
   if (typeof body.startImageId === "string") {
-    const dataUrl = await resolveDataUrl(body.startImageId);
+    const dataUrl = (await resolveDataUrl(body.startImageId)) ?? acceptDataUrl(body.startImageDataUrl, "image");
     if (dataUrl) payload.imageDataUrl = dataUrl;
+    else missing.push("시작 이미지");
   }
   if (typeof body.sourceVideoId === "string") {
-    const dataUrl = await resolveDataUrl(body.sourceVideoId);
+    const dataUrl = (await resolveDataUrl(body.sourceVideoId)) ?? acceptDataUrl(body.sourceVideoDataUrl, "video");
     if (dataUrl) payload.videoDataUrl = dataUrl;
+    else missing.push("원본(참조) 동영상");
   }
   // 끝 프레임(예: Kling의 image_tail)은 원 개발사 자료로 확인된 모델에서만
   // 지원합니다. 필드 이름은 클라이언트가 아니라 서버가
@@ -73,12 +81,16 @@ export async function POST(request: NextRequest) {
     const overlay = findVideoOverlay(model, model);
     const endFrameRole = overlay?.imageRoles?.find((role) => role.role === "end_frame");
     if (endFrameRole) {
-      const dataUrl = await resolveDataUrl(body.endImageId);
+      const dataUrl = (await resolveDataUrl(body.endImageId)) ?? acceptDataUrl(body.endImageDataUrl, "image");
+      if (!dataUrl) missing.push("끝 프레임");
       if (dataUrl) {
         payload[endFrameRole.field] = dataUrl;
         endImageField = endFrameRole.field;
       }
     }
+  }
+  if (missing.length > 0) {
+    return NextResponse.json({ error: `${missing.join(", ")}: ${MISSING_ATTACHMENT_MESSAGE}`, missing }, { status: 409 });
   }
   // 길이·해상도·품질 등 모델이 supported_parameters로 공개한 나머지 설정.
   const reservedKeys = new Set(["model", "prompt", "imagedataurl", "videodataurl", "imageurl", "videourl"]);

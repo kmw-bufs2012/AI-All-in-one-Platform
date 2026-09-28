@@ -232,6 +232,34 @@ export async function attachmentBlob(file: AttachedFile): Promise<Blob> {
   return response.blob();
 }
 
+/**
+ * 첨부 파일의 브라우저 사본(메모리 → IndexedDB 7일 보관)을 data URL 로 돌려줍니다.
+ * 사본이 없거나 maxChars 를 넘으면 null(서버 사본에 맡김).
+ */
+export async function attachmentDataUrl(file: AttachedFile, maxChars: number): Promise<string | null> {
+  const blob = localFiles.get(file.id) ?? (await getCachedAttachment(file.url));
+  if (!blob || Math.ceil(blob.size / 3) * 4 + 64 > maxChars) return null;
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** 여러 첨부를 예산 안에서 data URL 로 싣습니다(앞쪽 우선). id → data URL. */
+export async function inlineAttachments(files: AttachedFile[], budgetChars: number): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  let remaining = budgetChars;
+  for (const file of files) {
+    const dataUrl = await attachmentDataUrl(file, remaining);
+    if (!dataUrl) continue;
+    out[file.id] = dataUrl;
+    remaining -= dataUrl.length;
+  }
+  return out;
+}
+
 export async function uploadFiles(
   files: File[],
   onProgress?: (fileIndex: number, fraction: number) => void,

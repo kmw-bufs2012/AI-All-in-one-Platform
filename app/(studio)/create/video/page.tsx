@@ -10,7 +10,8 @@ import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
 import { AttachmentMedia, AttachStrip, FileChip, ModelChip, ModelDetail, NewSessionButton, SelectChip, SendButton } from "@/components/studio-ui";
 import { GenerationTile, useNow, type GenerationJob } from "@/components/GenerationProgress";
-import { MAX_VIDEO_BYTES, needsVideoCompression, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
+import { INLINE_BUDGET_CHARS } from "@/lib/inline-media";
+import { attachmentDataUrl, MAX_VIDEO_BYTES, needsVideoCompression, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
 import { resolveVideoAttachmentPolicy } from "@/lib/attachment-policy";
 import { filterSupportedParamValues } from "@/lib/models";
 import { buildShotPrompt, type MasterSettings, type ShotFrame } from "@/lib/master-prompt";
@@ -228,6 +229,19 @@ export default function VideoPage() {
     const attachments = [startImage, sourceVideo, endFrameImage].filter((item): item is AttachedFile => Boolean(item));
     const errors: string[] = [];
 
+    // 서버 임시 저장소에서 첨부가 사라져도 되도록 브라우저 7일 보관 사본을 함께 보냅니다
+    // (요청 본문 한도 안에서 시작 이미지 → 끝 프레임 → 원본 동영상 순).
+    let budget = INLINE_BUDGET_CHARS;
+    const inline = async (file: AttachedFile | null, allowed: boolean) => {
+      if (!file || !allowed) return undefined;
+      const dataUrl = await attachmentDataUrl(file, budget);
+      if (dataUrl) budget -= dataUrl.length;
+      return dataUrl ?? undefined;
+    };
+    const startImageDataUrl = await inline(startImage, supportsStartImage);
+    const endImageDataUrl = await inline(endFrameImage, supportsEndFrame);
+    const sourceVideoDataUrl = await inline(sourceVideo, supportsSourceVideo);
+
     const runJob = async (job: GenerationJob) => {
       let quote = unitPrice !== null ? { amount: unitPrice, currency, actual: false } : null;
       const record = (state: "completed" | "failed", url: string | null) =>
@@ -254,6 +268,9 @@ export default function VideoPage() {
             startImageId: supportsStartImage ? startImage?.id : undefined,
             sourceVideoId: supportsSourceVideo ? sourceVideo?.id : undefined,
             endImageId: supportsEndFrame ? endFrameImage?.id : undefined,
+            startImageDataUrl,
+            endImageDataUrl,
+            sourceVideoDataUrl,
             params: {
               ...filterSupportedParamValues(model.videoParams, paramValues),
               ...(negativeSupported && textParams.negative_prompt ? { negative_prompt: textParams.negative_prompt.slice(0, 500) } : {}),

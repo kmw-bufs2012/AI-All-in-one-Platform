@@ -7,7 +7,8 @@ import { extractAudioWav, extractFramesAt } from "@/lib/video-reference";
 import { useModels } from "@/components/useModels";
 import { ModelChip, AttachStrip } from "@/components/studio-ui";
 import { resolveChatAttachmentPolicy, isVideoCapableModel, MAX_TOTAL_FRAMES } from "@/lib/attachment-policy";
-import { uploadFiles, extractVideoFrames, attachmentBlob, type AttachedFile } from "@/lib/client-api";
+import { uploadFiles, extractVideoFrames, attachmentBlob, inlineAttachments, type AttachedFile } from "@/lib/client-api";
+import { INLINE_BUDGET_CHARS } from "@/lib/inline-media";
 import {
   buildDirectPrompt,
   checkMasterPrompt,
@@ -105,6 +106,7 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
        * - 음성을 못 듣는 모델: 대사를 지어내지 않도록 알립니다.
        */
       let mode: "in-video" | "separate-file" | "none" = "none";
+      let audioFile: AttachedFile | null = null;
       const attachments: Record<string, string[]> = { ...(payload.attachments as Record<string, string[]>) };
       if (writerPolicy.audio.allowed) {
         if (writerPolicy.videoNative) {
@@ -116,6 +118,7 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
           if (wav) {
             const [uploadedAudio] = await uploadFiles([wav]);
             attachments.audios = [uploadedAudio.id];
+            audioFile = uploadedAudio;
             mode = "separate-file";
           }
           setStage(`${writer.selected.name}이(가) 동영상을 보고 마스터 프롬프트를 작성하고 있습니다…`);
@@ -128,6 +131,13 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
           messages: [{ role: "user", content: buildDirectPrompt(meta, note, mode) }],
           ...payload,
           attachments,
+          // 서버 임시 저장소에서 사라졌을 때를 대비한 브라우저 7일 보관 사본.
+          inlineMedia: await inlineAttachments(
+            [...(attachments.videos ?? []), ...(attachments.audios ?? [])]
+              .map((id) => (id === video.id ? video : audioFile && audioFile.id === id ? audioFile : null))
+              .filter((item): item is AttachedFile => item !== null),
+            INLINE_BUDGET_CHARS,
+          ),
           pdfAllowed: false,
         },
         setOutput,

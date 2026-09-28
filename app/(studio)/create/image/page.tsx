@@ -19,7 +19,8 @@ import {
   SelectChip,
   SendButton,
 } from "@/components/studio-ui";
-import { recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
+import { inlineAttachments, recordJob, uploadFiles, type AttachedFile } from "@/lib/client-api";
+import { INLINE_BUDGET_CHARS } from "@/lib/inline-media";
 import { resolveImageAttachmentPolicy } from "@/lib/attachment-policy";
 import { formatCost } from "@/lib/cost";
 import { filterSupportedParamValues } from "@/lib/models";
@@ -161,6 +162,9 @@ export default function ImagePage() {
     }));
     setJobs(batch);
 
+    // 서버 임시 저장소에서 참조 이미지가 사라져도 되도록 브라우저 7일 보관 사본을 함께 보냅니다.
+    const inlineReferences = await inlineAttachments(refs, INLINE_BUDGET_CHARS);
+
     const runRequest = async (requestIndex: number) => {
       const n = Math.min(perRequest, wanted - requestIndex * perRequest);
       const jobIds = batch.slice(requestIndex * perRequest, requestIndex * perRequest + n).map((job) => job.id);
@@ -172,6 +176,7 @@ export default function ImagePage() {
             model: model.id,
             prompt: finalPrompt,
             referenceIds: refs.map((item) => item.id),
+            inlineReferences,
             resolution: activeResolution === DEFAULT_RESOLUTION ? undefined : activeResolution,
             officialResolution: model.officialResolutions === true,
             n: n > 1 ? n : undefined,

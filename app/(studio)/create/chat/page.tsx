@@ -1,5 +1,6 @@
 "use client";
 
+import { INLINE_BUDGET_CHARS } from "@/lib/inline-media";
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { useStudioState } from "@/components/StudioState";
@@ -28,7 +29,8 @@ import {
   MAX_VIDEO_BYTES,
   extractVideoFrames,
   attachmentBlob,
-  getLocalFile,
+  attachmentDataUrl,
+  inlineAttachments,
   needsVideoCompression,
   recordJob,
   uploadFiles,
@@ -418,20 +420,20 @@ export default function ChatPage() {
       const idImages: string[] = [];
       let inlineBytes = frames.reduce((sum, frame) => sum + frame.length, 0);
       for (const item of snapshot.filter((entry) => entry.kind === "image")) {
-        const local = getLocalFile(item.id);
-        if (local && inlineBytes + local.size * 1.37 < 3.5 * 1024 * 1024) {
-          const dataUrl = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result));
-            reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(local);
-          });
+        // 메모리 사본이 없으면(새로고침 후) 브라우저 7일 보관 사본(IndexedDB)을 씁니다.
+        const dataUrl = await attachmentDataUrl(item, INLINE_BUDGET_CHARS - inlineBytes);
+        if (dataUrl) {
           inlineImages.push(dataUrl);
           inlineBytes += dataUrl.length;
         } else {
           idImages.push(item.id);
         }
       }
+      // 동영상·음성은 ID로 보내되, 서버 임시 저장소에서 사라진 경우를 대비해 남은 예산 안에서 사본도 싣습니다.
+      const inlineMedia = await inlineAttachments(
+        snapshot.filter((entry) => entry.kind === "video" || entry.kind === "audio"),
+        Math.max(0, INLINE_BUDGET_CHARS - inlineBytes),
+      );
       const postChat = (sendNativeVideo: boolean) =>
         fetch("/api/chat", {
           method: "POST",
@@ -452,6 +454,9 @@ export default function ChatPage() {
             frames,
             frameGroups,
             inlineImages,
+            inlineMedia: sendNativeVideo ? inlineMedia : Object.fromEntries(
+              Object.entries(inlineMedia).filter(([id]) => snapshot.find((item) => item.id === id)?.kind === "audio"),
+            ),
             pdfAllowed: policy.pdfAllowed,
           }),
         });

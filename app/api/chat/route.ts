@@ -1,3 +1,4 @@
+import { acceptDataUrl, MISSING_ATTACHMENT_MESSAGE } from "@/lib/inline-media";
 import { NextRequest, NextResponse } from "next/server";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -71,6 +72,8 @@ export async function POST(request: NextRequest) {
     frames?: unknown;
     frameGroups?: unknown;
     inlineImages?: unknown;
+    /** 브라우저 7일 보관 사본(id → data URL). 서버 디스크에 없을 때 대신 씁니다. */
+    inlineMedia?: unknown;
     pdfAllowed?: unknown;
   };
   try {
@@ -127,15 +130,22 @@ export async function POST(request: NextRequest) {
    * 서버리스 환경에서는 업로드 파일이 다른 인스턴스의 /tmp 에 있어 찾지 못할 수
    * 있습니다. 조용히 빼고 보내면 모델이 "첨부가 없다"고 답하므로 오류로 알립니다.
    */
+  const inlineMedia = body.inlineMedia && typeof body.inlineMedia === "object" && !Array.isArray(body.inlineMedia)
+    ? (body.inlineMedia as Record<string, unknown>)
+    : {};
+  const inlineFor = (id: string, kind: "image" | "video" | "audio") => acceptDataUrl(inlineMedia[id], kind);
   const missing: string[] = [];
-  for (const id of [...imageIds, ...videoIds, ...audioIds, ...docIds]) {
-    if (!(await resolveAttachmentFile(id))) missing.push(id);
+  for (const [ids, kind] of [[imageIds, "image"], [videoIds, "video"], [audioIds, "audio"], [docIds, null]] as const) {
+    for (const id of ids) {
+      if (await resolveAttachmentFile(id)) continue;
+      if (kind && inlineFor(id, kind)) continue;
+      missing.push(id);
+    }
   }
   if (missing.length > 0) {
     return NextResponse.json(
       {
-        error:
-          "서버에서 첨부 파일을 찾지 못했습니다. 서버리스 환경의 임시 저장소가 바뀌었을 수 있습니다. 파일을 다시 첨부한 뒤 보내 주세요.",
+        error: MISSING_ATTACHMENT_MESSAGE,
         missing,
       },
       { status: 409 },
@@ -144,17 +154,30 @@ export async function POST(request: NextRequest) {
 
   for (const id of imageIds) {
     const file = await resolveAttachmentFile(id);
-    if (!file) continue;
+    if (!file) {
+      const inline = inlineFor(id, "image");
+      if (inline) parts.push({ type: "image_url", image_url: { url: inline } });
+      continue;
+    }
     parts.push({ type: "image_url", image_url: { url: await toDataUrl(file.filePath, file.mime) } });
   }
   for (const id of videoIds) {
     const file = await resolveAttachmentFile(id);
-    if (!file) continue;
+    if (!file) {
+      const inline = inlineFor(id, "video");
+      if (inline) parts.push({ type: "video_url", video_url: { url: inline } });
+      continue;
+    }
     parts.push({ type: "video_url", video_url: { url: await toDataUrl(file.filePath, file.mime) } });
   }
   for (const id of audioIds) {
     const file = await resolveAttachmentFile(id);
-    if (!file) continue;
+    if (!file) {
+      const inline = inlineFor(id, "audio");
+      const match = inline?.match(/^data:audio\/([\w.+-]+);base64,(.*)$/);
+      if (match) parts.push({ type: "input_audio", input_audio: { data: match[2], format: audioFormat(`audio/${match[1]}`) } });
+      continue;
+    }
     const buffer = await readFile(file.filePath);
     parts.push({
       type: "input_audio",
