@@ -120,6 +120,9 @@ export function MediaCostEstimate({
               : ""}
           </div>
           {estimate.note ? <div className="media-estimate-foot">※ {estimate.note}</div> : null}
+          {estimate.routes?.length ? (
+            <div className="media-estimate-foot">제3자 라우팅 참고 단가: {estimate.routes.join(" · ")}</div>
+          ) : null}
           <div className="media-estimate-foot">출처: {estimate.source}. 실제 청구액은 NanoGPT 단가를 따르며 생성 후 표시됩니다.</div>
         </>
       ) : (

@@ -43,6 +43,8 @@ interface PricingRule {
   price: (ctx: PricingContext) => PriceResult | null;
   source: string;
   note?: string;
+  /** 제3자 라우팅(호스팅) 제공자의 참고 단가. 앱의 실제 청구액과는 무관합니다. */
+  routes?: string[];
 }
 
 const MP = 1024 * 1024;
@@ -88,13 +90,25 @@ const SEEDANCE_SIZE: Partial<Record<ResolutionTier, [number, number]>> = {
   "720p": [1280, 720],
   "1080p": [1920, 1080],
 };
-function seedance(ctx: PricingContext, seconds: number): PriceResult | null {
-  const hit = pickTier(ctx.tier, SEEDANCE_SIZE, "720p");
-  if (!hit) return null;
-  const [w, h] = hit.value;
-  const tokens = Math.round((w * h * 24 * seconds) / 1024);
-  return { usd: (tokens / 1_000_000) * 10.7, tokens, basis: `${hit.tier} · ${w}×${h}×24fps×${seconds}초÷1024 토큰 × $10.70/1M` };
+function seedanceAt(ratePerMillion: number, table: Partial<Record<ResolutionTier, [number, number]>> = SEEDANCE_SIZE) {
+  return (ctx: PricingContext, seconds: number): PriceResult | null => {
+    const hit = pickTier(ctx.tier, table, "720p");
+    if (!hit) return null;
+    const [w, h] = hit.value;
+    const tokens = Math.round((w * h * 24 * seconds) / 1024);
+    return {
+      usd: (tokens / 1_000_000) * ratePerMillion,
+      tokens,
+      basis: `${hit.tier} · ${w}×${h}×24fps×${seconds}초÷1024 토큰 × $${ratePerMillion.toFixed(2)}/1M`,
+    };
+  };
 }
+const seedance = seedanceAt(10.7);
+/* Fast·Mini 는 480p·720p 만 지원합니다(1080p 없음). */
+const SEEDANCE_LIGHT_SIZE: Partial<Record<ResolutionTier, [number, number]>> = {
+  "480p": SEEDANCE_SIZE["480p"],
+  "720p": SEEDANCE_SIZE["720p"],
+};
 
 export const MEDIA_PRICING_RULES: PricingRule[] = [
   /* ------------------------------------------------------------ 이미지 */
@@ -237,6 +251,45 @@ export const MEDIA_PRICING_RULES: PricingRule[] = [
     source: "Alibaba Model Studio 국제 단가 — therundown.ai 2026 인용",
   },
 
+  /*
+   * 무검열 오픈 웨이트 이미지 모델. 원 개발사의 유료 API가 없어, 신뢰할 만한
+   * 제3자 호스팅(Venice 공식 API 문서·모델 페이지)의 공개 단가를 씁니다.
+   */
+  {
+    vendor: "커뮤니티 (Venice 호스팅 단가)",
+    label: "Lustify (SDXL·v7·v8)",
+    kind: "image",
+    match: /lustify/,
+    price: () => ({ usd: 0.01, basis: "장당 $0.01 (Venice API)" }),
+    source: "venice.ai/models/lustify-sdxl·lustify-v8, docs.venice.ai 2026 인용",
+    routes: ["Runware SDXL 계열 장당 약 $0.0026"],
+  },
+  {
+    vendor: "커뮤니티 (Venice 호스팅 단가)",
+    label: "Anime WAI (Illustrious)",
+    kind: "image",
+    match: /wai-?illustrious|illustrious/,
+    price: () => ({ usd: 0.01, basis: "장당 $0.01 (Venice API)" }),
+    source: "venice.ai/models/wai-illustrious 2026 인용",
+    routes: ["Replicate WAI-NSFW-Illustrious 1회 약 $0.0061"],
+  },
+  {
+    vendor: "커뮤니티 (Venice 호스팅 단가)",
+    label: "Chroma",
+    kind: "image",
+    match: /(^|-)chroma(-|$)/,
+    price: () => ({ usd: 0.01, basis: "장당 $0.01 (Venice API)" }),
+    source: "venicestats.com/venice-models/chroma, runtheprompts.com 2026 인용",
+  },
+  {
+    vendor: "Venice",
+    label: "Venice SD35",
+    kind: "image",
+    match: /venice-?sd-?35/,
+    price: () => ({ usd: 0.05, basis: "장당 $0.05 (Venice API)" }),
+    source: "venicestats.com, docs.venice.ai 2026 인용",
+  },
+
   /* ------------------------------------------------------------ 동영상 */
   videoRule(
     {
@@ -303,6 +356,7 @@ export const MEDIA_PRICING_RULES: PricingRule[] = [
       match: /grok-imagine-(text|image|video|reference)-to-video/,
       defaultSeconds: 6,
       source: "xAI API 단가(2026-08-28 확인) — dreampixelforge.com 인용",
+      routes: ["OpenRouter 초당 $0.05부터"],
     },
     perSecond({ "480p": 0.05, "720p": 0.07 }, "720p"),
   ),
@@ -332,11 +386,41 @@ export const MEDIA_PRICING_RULES: PricingRule[] = [
   videoRule(
     {
       vendor: "ByteDance",
+      label: "Seedance 2.0 Mini",
+      match: /seedance-?2-0-?mini/,
+      defaultSeconds: 5,
+      source: "BytePlus ModelArk $3.50/1M 토큰 — segmind.com·opper.ai 2026-09 인용",
+      routes: [
+        "fal.ai 480p 초당 $0.0721 · 720p 초당 $0.1547",
+        "Segmind $1.75/1M 토큰(50% 할인가)",
+        "NanoGPT Mini Spicy 이미지→동영상 약 $0.30/편",
+      ],
+    },
+    seedanceAt(3.5, SEEDANCE_LIGHT_SIZE),
+  ),
+  videoRule(
+    {
+      vendor: "ByteDance",
+      label: "Seedance 2.0 Fast",
+      match: /seedance-?2-0-?fast/,
+      defaultSeconds: 5,
+      source: "BytePlus ModelArk $5.60/1M 토큰(동영상 입력 없음; 있으면 $3.30) — segmind.com·apiframe.ai 2026 인용",
+      routes: ["fal.ai 720p 초당 $0.2419", "Segmind $2.80/1M 토큰(50% 할인가)"],
+    },
+    seedanceAt(5.6, SEEDANCE_LIGHT_SIZE),
+  ),
+  videoRule(
+    {
+      vendor: "ByteDance",
       label: "Seedance 2.5 / 2.0",
       match: /seedance-?2-(5|0)(?!\d)/,
       defaultSeconds: 5,
       source: "BytePlus ModelArk 동영상 토큰 $10.70/1M·토큰 공식 — anikuku.com·cellcog.ai 2026 인용",
-      note: "Fast·Mini 변형의 단가는 확인하지 못했습니다.",
+      routes: [
+        "fal.ai 2.0 720p 초당 $0.3034",
+        "Atlas Cloud 2.0 720p 초당 $0.1486(동영상 입력 포함)",
+        "OpenRouter 2.5 초당 $0.1028부터",
+      ],
     },
     seedance,
   ),
@@ -372,7 +456,7 @@ export const MEDIA_PRICING_RULES: PricingRule[] = [
     perSecond({ "480p": 0.042, "720p": 0.085, "1080p": 0.169 }, "1080p"),
   ),
   videoRule(
-    { vendor: "Alibaba", label: "Wan 2.7", match: /wan-2-7-(text|image|enhanced|reference)/, defaultSeconds: 5, source: "Alibaba 단가 — nemovideo.com·yottalabs.ai 2026 인용" },
+    { vendor: "Alibaba", label: "Wan 2.7", match: /wan-2-7-(text|image|enhanced|reference)/, defaultSeconds: 5, source: "Alibaba 단가 — nemovideo.com·yottalabs.ai 2026 인용", routes: ["NanoGPT Wan 2.7 이미지→동영상 Spicy 약 $0.50/편"] },
     perSecond({ "720p": 0.086, "1080p": 0.144 }, "1080p"),
   ),
 ];
@@ -458,6 +542,7 @@ export interface MediaEstimate {
   basis: string;
   source: string;
   note?: string;
+  routes?: string[];
 }
 
 export function estimateMediaCost(
@@ -478,10 +563,16 @@ export function estimateMediaCost(
   const rule = MEDIA_PRICING_RULES.find((item) => item.kind === kind && candidates.some((value) => item.match.test(value)));
   if (!rule) return null;
   // 기본 모델 규칙에 맞은 Fast·Mini·Lite 등 변형은 공식 단가를 따로 확인하지 못했으므로 알려 줍니다.
-  const variant = candidates.join(" ").match(/\b(fast|mini|lite|spicy|turbo|flash)\b/);
-  const variantNote = variant && !rule.label.toLowerCase().includes(variant[1])
-    ? `이 모델(${variant[1]} 변형)의 공식 단가는 확인하지 못해 ${rule.label} 기본 단가로 계산했습니다. 실제 청구액과 다를 수 있습니다.`
-    : undefined;
+  const joined = candidates.join(" ");
+  const variant = joined.match(/\b(fast|mini|lite|turbo|flash)\b/);
+  const notes: string[] = [];
+  if (variant && !rule.label.toLowerCase().includes(variant[1])) {
+    notes.push(`이 모델(${variant[1]} 변형)의 공식 단가는 확인하지 못해 ${rule.label} 단가로 계산했습니다. 실제 청구액과 다를 수 있습니다.`);
+  }
+  if (/\bspicy\b|uncensored|nsfw/.test(joined)) {
+    notes.push("무검열(Spicy 등) 버전의 별도 공식 단가는 공개되지 않아 같은 등급 모델 단가로 계산했습니다.");
+  }
+  const variantNote = notes.length ? notes.join(" ") : undefined;
   const ctx = buildPricingContext(params, extra);
   const result = rule.price(ctx);
   if (!result) return null;
@@ -498,5 +589,6 @@ export function estimateMediaCost(
     basis: result.basis,
     source: rule.source,
     note: variantNote ?? rule.note,
+    routes: rule.routes,
   };
 }
