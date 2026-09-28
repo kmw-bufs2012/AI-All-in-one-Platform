@@ -43,7 +43,20 @@ interface ChatMessage {
   attachments?: AttachedFile[];
   framesCount?: number;
   costLine?: string;
+  /** 추론 모델이 보낸 생각 과정(reasoning) 텍스트. */
+  reasoning?: string;
+  /** 답변 첫 글자가 나오기까지 생각한 시간(초). */
+  thinkingSeconds?: number;
 }
+
+/* 스트리밍 중 진행 단계. Claude Code 처럼 지금 무엇을 하는지 보여 줍니다. */
+type StreamPhase = "waiting" | "thinking" | "deep" | "writing" | "finishing";
+
+/* 생각이 이 시간(또는 분량)을 넘으면 '깊게 생각 중'으로 표시합니다. */
+const DEEP_THINK_MS = 20 * 1000;
+const DEEP_THINK_CHARS = 3000;
+/* 바닥에서 이 거리 안에 있으면 사용자가 '맨 아래를 보고 있다'고 봅니다. */
+const STICK_THRESHOLD_PX = 80;
 
 /* 스트리밍 응답이 끊기지 않고 늘어질 때 무한 로딩을 막는 상한입니다. */
 const STREAM_IDLE_TIMEOUT_MS = 90 * 1000;
@@ -63,10 +76,50 @@ export default function ChatPage() {
   const [error, setError] = useState("");
   const [lightbox, setLightbox] = useState<LightboxContent>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 사용자가 위로 스크롤하면 false 가 되어 자동 스크롤을 멈춥니다.
+  const stickToBottom = useRef(true);
+  const [phase, setPhase] = useState<StreamPhase>("waiting");
+  const [phaseStartedAt, setPhaseStartedAt] = useState(0);
+  const [, setTick] = useState(0);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, sending]);
+    if (!stickToBottom.current) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, sending, phase]);
+
+  // 진행 표시의 경과 초를 1초마다 갱신합니다.
+  useEffect(() => {
+    if (!sending) return;
+    const timer = setInterval(() => setTick((value) => value + 1), 1000);
+    return () => clearInterval(timer);
+  }, [sending]);
+
+  function onScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD_PX;
+  }
+
+  async function copyText(text: string, index: number) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // 권한이 막힌 환경(비보안 컨텍스트 등)에서는 임시 textarea 로 복사합니다.
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+    setCopiedIndex(index);
+    setTimeout(() => setCopiedIndex((current) => (current === index ? null : current)), 1500);
+  }
 
   // 프롬프트 관리 화면에서 넘어온 경우 입력창을 채웁니다.
   useEffect(() => {
@@ -333,6 +386,20 @@ export default function ChatPage() {
     setAttachments([]);
 
     let assistantText = "";
+    let reasoningText = "";
+    let thinkingSeconds: number | undefined;
+    let currentPhase: StreamPhase = "waiting";
+    const changePhase = (next: StreamPhase) => {
+      if (currentPhase === next) return;
+      const stillThinking = next === "thinking" || next === "deep";
+      currentPhase = next;
+      setPhase(next);
+      // 생각 단계끼리는 경과 시간을 이어서 셉니다('12초 생각 중' → '25초 깊게 생각 중').
+      if (!stillThinking) setPhaseStartedAt(Date.now());
+    };
+    stickToBottom.current = true;
+    setPhase("waiting");
+    setPhaseStartedAt(Date.now());
     let realUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null = null;
     // NanoGPT는 stream_options.include_usage 요청 시 마지막 청크의 usage 안에
     // 실제 청구액을 함께 실어 보내는 경우가 있습니다(공식 문서: "Every API
@@ -442,7 +509,10 @@ export default function ChatPage() {
             }
             try {
               const parsed = JSON.parse(data) as {
-                choices?: Array<{ delta?: { content?: string } }>;
+                choices?: Array<{
+                  delta?: { content?: string; reasoning?: string; reasoning_content?: string };
+                  finish_reason?: string | null;
+                }>;
                 usage?: {
                   prompt_tokens?: number;
                   completion_tokens?: number;
@@ -453,8 +523,21 @@ export default function ChatPage() {
                 };
                 cost?: number;
               };
-              const delta = parsed.choices?.[0]?.delta?.content;
-              if (typeof delta === "string") assistantText += delta;
+              const choice = parsed.choices?.[0];
+              const reasoningDelta = choice?.delta?.reasoning ?? choice?.delta?.reasoning_content;
+              if (typeof reasoningDelta === "string" && reasoningDelta) {
+                reasoningText += reasoningDelta;
+                const deep =
+                  Date.now() - streamStartedAt > DEEP_THINK_MS || reasoningText.length > DEEP_THINK_CHARS;
+                changePhase(deep ? "deep" : "thinking");
+              }
+              const delta = choice?.delta?.content;
+              if (typeof delta === "string" && delta) {
+                if (!assistantText) thinkingSeconds = Math.round((Date.now() - streamStartedAt) / 1000);
+                assistantText += delta;
+                changePhase("writing");
+              }
+              if (choice?.finish_reason) changePhase("finishing");
               if (parsed.usage) realUsage = parsed.usage;
               const costCandidate = parsed.usage?.cost ?? parsed.usage?.total_cost ?? parsed.usage?.cost_usd ?? parsed.cost;
               if (typeof costCandidate === "number" && Number.isFinite(costCandidate)) {
@@ -464,7 +547,8 @@ export default function ChatPage() {
               setMessages((prev) => {
                 const copy = [...prev];
                 const last = copy[copy.length - 1];
-                if (last && last.role === "assistant") copy[copy.length - 1] = { ...last, content: assistantText };
+                if (last && last.role === "assistant")
+                  copy[copy.length - 1] = { ...last, content: assistantText, reasoning: reasoningText || undefined };
                 return copy;
               });
             } catch {
@@ -484,6 +568,7 @@ export default function ChatPage() {
         }
       }
 
+      changePhase("finishing");
       if (!assistantText) {
         throw new Error("모델이 응답을 보내지 않았습니다. 잠시 후 다시 시도해 주세요.");
       }
@@ -506,7 +591,13 @@ export default function ChatPage() {
       setMessages((prev) => {
         const copy = [...prev];
         const last = copy[copy.length - 1];
-        if (last && last.role === "assistant") copy[copy.length - 1] = { ...last, content: assistantText, costLine };
+        if (last && last.role === "assistant") copy[copy.length - 1] = {
+            ...last,
+            content: assistantText,
+            reasoning: reasoningText || undefined,
+            thinkingSeconds: reasoningText ? thinkingSeconds : undefined,
+            costLine,
+          };
         return copy;
       });
 
@@ -558,7 +649,7 @@ export default function ChatPage() {
 
   return (
     <div className="studio">
-      <div className="studio-scroll">
+      <div className="studio-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="studio-inner">
           <div className="studio-toolbar">
             <NewSessionButton disabled={sending || compressingVideo} onClick={startNewSession} />
@@ -677,15 +768,33 @@ export default function ChatPage() {
                           })}
                         </div>
                       ) : null}
-                      {message.content ||
-                        (message.role === "assistant" && sending && index === messages.length - 1 ? (
-                          <span className="typing">
-                            <span />
-                            <span />
-                            <span />
-                          </span>
-                        ) : null)}
+                      {message.role === "assistant" && message.reasoning ? (
+                        <details className="thinking-details">
+                          <summary>
+                            {message.thinkingSeconds !== undefined
+                              ? `${message.thinkingSeconds}초 동안 생각함`
+                              : "생각 과정"}
+                          </summary>
+                          <div className="thinking-body">{message.reasoning}</div>
+                        </details>
+                      ) : null}
+                      {message.content}
+                      {message.role === "assistant" && sending && index === messages.length - 1 ? (
+                        <StreamStatus phase={phase} since={phaseStartedAt} />
+                      ) : null}
                     </div>
+                    {message.content && !(sending && index === messages.length - 1) ? (
+                      <div className="msg-actions">
+                        <button
+                          type="button"
+                          className="msg-copy"
+                          onClick={() => copyText(message.content, index)}
+                          title={message.role === "assistant" ? "답변 전체 복사" : "프롬프트 전체 복사"}
+                        >
+                          {copiedIndex === index ? "복사됨" : message.role === "assistant" ? "답변 복사" : "프롬프트 복사"}
+                        </button>
+                      </div>
+                    ) : null}
                     {message.framesCount ? (
                       <div className="msg-foot">동영상에서 {message.framesCount}개의 프레임을 함께 보냈습니다.</div>
                     ) : null}
@@ -768,5 +877,25 @@ export default function ChatPage() {
 
       <Lightbox content={lightbox} onClose={() => setLightbox(null)} />
     </div>
+  );
+}
+
+const PHASE_LABEL: Record<StreamPhase, string> = {
+  waiting: "생각 중",
+  thinking: "생각 중",
+  deep: "깊게 생각 중",
+  writing: "답변 작성 중",
+  finishing: "마무리 중",
+};
+
+/** 스트리밍 진행 단계와 경과 시간을 보여 줍니다(부모가 1초마다 다시 그립니다). */
+function StreamStatus({ phase, since }: { phase: StreamPhase; since: number }) {
+  const seconds = Math.max(0, Math.floor((Date.now() - since) / 1000));
+  const showSeconds = phase !== "finishing";
+  return (
+    <span className="stream-status" role="status" aria-live="polite">
+      <span className="stream-status-dot" />
+      {showSeconds ? `${seconds}초 ${PHASE_LABEL[phase]}…` : `${PHASE_LABEL[phase]}…`}
+    </span>
   );
 }

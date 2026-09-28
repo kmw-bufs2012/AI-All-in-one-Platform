@@ -1,5 +1,6 @@
 "use client";
 
+import { MediaCostEstimate } from "@/components/MediaCostEstimate";
 import { useState } from "react";
 import { Icon } from "@/components/Icon";
 import {
@@ -180,6 +181,14 @@ export default function ImagePage() {
             params={models.selected?.imageParams ?? []}
             values={paramValues}
             onChange={changeParam}
+          />
+          <MediaCostEstimate
+            kind="image"
+            modelId={models.selected?.id}
+            params={paramValues}
+            resolution={activeResolution === DEFAULT_RESOLUTION ? null : activeResolution}
+            catalogUnitPrice={models.selected?.pricing?.perRequest ?? null}
+            catalogCurrency={models.selected?.pricing?.currency ?? null}
           />
 
           {results.length === 0 ? (
