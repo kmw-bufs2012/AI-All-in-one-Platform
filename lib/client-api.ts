@@ -1,3 +1,4 @@
+import { getCachedAttachment, rememberAttachment } from "@/lib/attachment-cache";
 /*
  * 생성 페이지들이 공통으로 쓰는 브라우저 측 유틸입니다.
  * (기존 단일 스튜디오 페이지에 흩어져 있던 로직을 그대로 옮겨 놓았습니다.)
@@ -220,6 +221,8 @@ export function getLocalFile(id: string): File | null {
 export async function attachmentBlob(file: AttachedFile): Promise<Blob> {
   const local = localFiles.get(file.id);
   if (local) return local;
+  const cached = await getCachedAttachment(file.url);
+  if (cached) return cached;
   const response = await fetch(file.url);
   if (!response.ok) {
     throw new Error(
@@ -246,6 +249,7 @@ export async function uploadFiles(
       ? await uploadFileChunked(file, (fraction) => onProgress?.(i, fraction))
       : await uploadFileWhole(file);
     localFiles.set(result.id, file);
+    rememberAttachment(result.url, file);
     uploaded.push(result);
   }
   return uploaded;

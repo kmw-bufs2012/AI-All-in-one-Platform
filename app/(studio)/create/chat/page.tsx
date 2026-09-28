@@ -19,6 +19,7 @@ import {
   Lightbox,
   ModelChip,
   ModelDetail,
+  AttachmentMedia,
   NewSessionButton,
   SendButton,
   type LightboxContent,
@@ -635,9 +636,10 @@ export default function ChatPage() {
                           {message.attachments.map((item) => {
                             if (item.kind === "image") {
                               return (
-                                <img
+                                <AttachmentMedia
                                   key={item.id}
-                                  src={item.url}
+                                  kind="image"
+                                  url={item.url}
                                   alt={item.name}
                                   onClick={() => setLightbox({ url: item.url, kind: "image", name: item.name, size: item.size, mime: item.mime })}
                                 />
@@ -646,7 +648,7 @@ export default function ChatPage() {
                             if (item.kind === "video") {
                               return (
                                 <span key={item.id} className="bubble-video-wrap">
-                                  <video src={item.url} controls preload="metadata" />
+                                  <AttachmentMedia kind="video" url={item.url} controls />
                                   <button
                                     type="button"
                                     className="bubble-video-expand"

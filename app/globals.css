@@ -2691,3 +2691,11 @@ button.new-session-button {
 }
 .jobs-actions button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 @media (max-width: 700px) { .jobs-trigger span:not(.jobs-count) { display: none; } }
+
+.attach-media-loading {
+  display: inline-block;
+  width: 92px;
+  height: 92px;
+  border-radius: 9px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.15));
+}

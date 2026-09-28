@@ -5,6 +5,7 @@ import { modelDisplayLabel, type NormalizedModel } from "@/lib/models";
 import type { AttachedFile } from "@/lib/client-api";
 import { Icon, type IconName } from "./Icon";
 import type { ModelsHook } from "./useModels";
+import { useAttachmentSrc } from "@/lib/attachment-cache";
 
 export function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "";
@@ -331,7 +332,7 @@ export function AttachStrip({
                 aria-label={`${file.name} 미리보기`}
                 title="클릭해서 크게 보기"
               >
-                {file.kind === "image" ? <img src={file.url} alt={file.name} /> : <video src={file.url} preload="metadata" />}
+                <AttachmentMedia url={file.url} kind={file.kind === "image" ? "image" : "video"} alt={file.name} />
               </button>
             ) : (
               <span className="attach-chip-doc-icon">
@@ -430,8 +431,12 @@ export function Lightbox({
   onClose: () => void;
 }) {
   const raw = content !== undefined ? content : (src ?? null);
+  const resolvedUrl = useAttachmentSrc(raw ? (typeof raw === "string" ? raw : raw.url) : undefined);
   if (!raw) return null;
-  const file: LightboxFile = typeof raw === "string" ? { url: raw, kind: "image" } : raw;
+  const original: LightboxFile = typeof raw === "string" ? { url: raw, kind: "image" } : raw;
+  // 서버리스 임시 저장소에서 파일이 사라져도 브라우저 사본으로 보여 줍니다.
+  if (!resolvedUrl) return null;
+  const file: LightboxFile = { ...original, url: resolvedUrl };
 
   if (file.kind === "doc" || file.kind === "audio") {
     return (
@@ -493,4 +498,18 @@ export function EmptyState({
       {children ? <div className="empty-actions">{children}</div> : null}
     </div>
   );
+}
+
+/** 첨부 이미지·동영상 표시. 브라우저 사본이 있으면 서버 대신 그것을 씁니다. */
+export function AttachmentMedia({
+  url,
+  kind,
+  alt,
+  controls,
+  ...rest
+}: { url: string; kind: "image" | "video"; alt?: string; controls?: boolean } & Omit<React.HTMLAttributes<HTMLElement>, "children">) {
+  const src = useAttachmentSrc(url);
+  if (!src) return <span className="attach-media-loading" aria-label={alt} />;
+  if (kind === "video") return <video src={src} preload="metadata" controls={controls} {...(rest as React.VideoHTMLAttributes<HTMLVideoElement>)} />;
+  return <img src={src} alt={alt ?? ""} {...(rest as React.ImgHTMLAttributes<HTMLImageElement>)} />;
 }
