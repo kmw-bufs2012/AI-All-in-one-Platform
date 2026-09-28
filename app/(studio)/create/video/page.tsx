@@ -1,5 +1,6 @@
 "use client";
 
+import { MediaCostEstimate } from "@/components/MediaCostEstimate";
 import { useEffect, useRef, useState } from "react";
 import {
   DynamicParamsPanel,
@@ -272,6 +273,14 @@ export default function VideoPage() {
             params={models.selected?.videoParams ?? []}
             values={paramValues}
             onChange={changeParam}
+          />
+          <MediaCostEstimate
+            kind="video"
+            modelId={models.selected?.id}
+            params={paramValues}
+            resolution={null}
+            catalogUnitPrice={models.selected?.pricing?.perRequest ?? null}
+            catalogCurrency={models.selected?.pricing?.currency ?? null}
           />
           {policy.note ? <p className="muted" style={{ fontSize: 11.5, marginTop: -8, marginBottom: 12 }}>{policy.note}</p> : null}
           {durationNote ? <p className="muted" style={{ fontSize: 11.5, marginTop: -8, marginBottom: 12 }}>{durationNote}</p> : null}
