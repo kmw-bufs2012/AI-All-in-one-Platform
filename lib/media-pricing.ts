@@ -199,21 +199,39 @@ export const MEDIA_PRICING_RULES: PricingRule[] = [
     vendor: "ByteDance",
     label: "Seedream 5.0 Pro",
     kind: "image",
-    match: /seedream-v5-pro/,
+    match: /seedream-?v?5(-0)?-?pro/,
     price: (ctx) => {
       const pixels = ctx.width && ctx.height ? ctx.width * ctx.height : null;
       const big = pixels !== null ? pixels > 2_360_000 : ctx.tier === "4k";
       return { usd: big ? 0.09 : 0.045, basis: big ? "2.36MP 초과 $0.09" : "2.36MP 이하 $0.045" };
     },
     source: "BytePlus 단가 — atlascloud.ai 2026 인용",
+    routes: ["fal.ai 장당 약 $0.045~$0.15(해상도별)", "Siray 5.0 Pro Spicy(무검열) 장당 $0.045"],
   },
   {
     vendor: "ByteDance",
     label: "Seedream 5.0 Lite",
     kind: "image",
-    match: /seedream-v5-lite/,
+    match: /seedream-?v?5(-0)?-?lite/,
     price: () => ({ usd: 0.035, basis: "장당 $0.035" }),
     source: "BytePlus 단가 — segmind.com·evolink.ai 2026 인용",
+  },
+  {
+    vendor: "ByteDance",
+    label: "Seedream 4.5",
+    kind: "image",
+    match: /seedream-?v?4-5/,
+    price: () => ({ usd: 0.04, basis: "장당 $0.04" }),
+    source: "fal.ai·Atlas Cloud 공개 단가(원 제공사 BytePlus 단가 기준) 2026 인용",
+    routes: ["fal.ai 장당 $0.04", "Siray 4.5 Spicy(무검열) 장당 $0.040"],
+  },
+  {
+    vendor: "ByteDance",
+    label: "Seedream 4.0",
+    kind: "image",
+    match: /seedream-?v?4(-0)?(?!-?\d)/,
+    price: () => ({ usd: 0.03, basis: "장당 $0.03" }),
+    source: "siray.ai·fal.ai 2026 인용",
   },
   {
     vendor: "Alibaba (Qwen)",
