@@ -74,8 +74,17 @@ export default function VideoPage() {
   const durationNote = models.selected?.durationNote ?? null;
   // NanoGPT에는 동영상 견적 전용 엔드포인트가 없어, 카탈로그가 공개한 단가로
   // 예상 비용을 보여 줍니다(공개하지 않는 모델은 표시하지 않습니다).
-  const unitPrice = models.selected?.pricing?.perRequest ?? null;
-  const currency = models.selected?.pricing?.currency ?? null;
+  // 카탈로그 단가가 초당 단가면 선택한 길이(없으면 파라미터 기본값)를 곱해 1편 가격으로 바꿉니다.
+  const durationKey = (models.selected?.videoParams ?? []).find((item) => /^(duration|seconds)$/i.test(item.key));
+  const catalogSeconds = (() => {
+    const raw = durationKey ? paramValues[durationKey.key] ?? durationKey.default : undefined;
+    const parsed = typeof raw === "number" ? raw : Number.parseFloat(String(raw ?? ""));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  })();
+  const pricing = models.selected?.pricing ?? null;
+  const unitPrice = pricing?.perRequest
+    ?? (pricing?.perSecond != null && catalogSeconds !== null ? pricing.perSecond * catalogSeconds : null);
+  const currency = pricing?.currency ?? null;
 
   function changeParam(key: string, value: string | number | undefined) {
     setParamValues((previous) => {
@@ -369,8 +378,8 @@ export default function VideoPage() {
             params={paramValues}
             resolution={null}
             multiplier={Number(batchCount) || 1}
-            catalogUnitPrice={models.selected?.pricing?.perRequest ?? null}
-            catalogCurrency={models.selected?.pricing?.currency ?? null}
+            catalogUnitPrice={unitPrice}
+            catalogCurrency={currency}
           />
           {appliedNote ? <p className="muted" style={{ fontSize: 11.5, marginBottom: 8 }}>{appliedNote}</p> : null}
           {droppedNote ? <p className="muted" style={{ fontSize: 11.5, marginBottom: 8 }}>{droppedNote}</p> : null}

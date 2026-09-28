@@ -105,6 +105,8 @@ export interface ModelPricing {
   outputPer1M: number | null;
   /** 이미지·동영상·음성처럼 요청(또는 결과물) 단위로 과금되는 모델의 단가. */
   perRequest: number | null;
+  /** 동영상·음성처럼 길이(초) 단위로 과금되는 모델의 초당 단가. 건당 단가와 섞지 않습니다. */
+  perSecond: number | null;
   currency: string | null;
 }
 
@@ -379,7 +381,6 @@ function extractPricing(raw: Record<string, unknown>): ModelPricing | null {
     ?? asNumber(candidate.image)
     ?? asNumber(candidate.per_request)
     ?? asNumber(candidate.request)
-    ?? asNumber(candidate.per_second)
     ?? asNumber(candidate.audio)
     ?? asNumber(raw.cost_per_image)
     ?? asNumber(raw.costPerImage)
@@ -388,8 +389,10 @@ function extractPricing(raw: Record<string, unknown>): ModelPricing | null {
     ?? asNumber(raw.cost)
     ?? asNumber(raw.price);
 
-  if (inputPer1M === null && outputPer1M === null && perRequest === null) return null;
-  return { inputPer1M, outputPer1M, perRequest, currency };
+  // 초당 단가를 건당 단가로 읽으면 동영상 비용이 길이만큼 틀어지므로 따로 담습니다.
+  const perSecond = asNumber(candidate.per_second ?? candidate.perSecond);
+  if (inputPer1M === null && outputPer1M === null && perRequest === null && perSecond === null) return null;
+  return { inputPer1M, outputPer1M, perRequest, perSecond, currency };
 }
 
 function extractVoices(raw: Record<string, unknown>, params: SupportedParams): {
