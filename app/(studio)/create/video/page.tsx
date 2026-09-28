@@ -49,7 +49,7 @@ export default function VideoPage() {
   // 근거: docs/model-capability-research.md, lib/model-capability-overlay.ts
   const supportsEndFrame = (models.selected?.extraImageRoles ?? []).some((role) => role.role === "end_frame");
   const durationNote = models.selected?.durationNote ?? null;
-  // NanoGPT에는 영상 견적 전용 엔드포인트가 없어, 카탈로그가 공개한 단가로
+  // NanoGPT에는 동영상 견적 전용 엔드포인트가 없어, 카탈로그가 공개한 단가로
   // 예상 비용을 보여 줍니다(공개하지 않는 모델은 표시하지 않습니다).
   const unitPrice = models.selected?.pricing?.perRequest ?? null;
   const currency = models.selected?.pricing?.currency ?? null;
@@ -103,11 +103,11 @@ export default function VideoPage() {
     if (!file) return;
     setError("");
     if (!supportsSourceVideo) {
-      setError("이 모델은 원본 영상을 지원하지 않습니다.");
+      setError("이 모델은 원본 동영상을 지원하지 않습니다.");
       return;
     }
     if (file.size > MAX_VIDEO_BYTES) {
-      setError("원본 영상은 50MB 이하만 첨부할 수 있습니다.");
+      setError("원본 동영상은 50MB 이하만 첨부할 수 있습니다.");
       return;
     }
     try {
@@ -115,7 +115,7 @@ export default function VideoPage() {
       const uploaded = await uploadFiles([file]);
       setSourceVideo(uploaded[0] ?? null);
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : "영상 업로드에 실패했습니다.");
+      setError(uploadError instanceof Error ? uploadError.message : "동영상 업로드에 실패했습니다.");
     } finally {
       setCompressingVideo(false);
     }
@@ -150,7 +150,7 @@ export default function VideoPage() {
     setEstimate(quote);
 
     try {
-      setStatus("영상 생성을 요청하고 있습니다…");
+      setStatus("동영상 생성을 요청하고 있습니다…");
       const queueResponse = await fetch("/api/video", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -164,7 +164,7 @@ export default function VideoPage() {
         }),
       });
       const queueBody = await queueResponse.json().catch(() => ({}));
-      if (!queueResponse.ok) throw new Error(queueBody.error || "영상 생성 요청에 실패했습니다.");
+      if (!queueResponse.ok) throw new Error(queueBody.error || "동영상 생성 요청에 실패했습니다.");
 
       if (queueBody.cost) {
         quote = { amount: queueBody.cost.amount, currency: queueBody.cost.currency ?? null, actual: true };
@@ -173,7 +173,7 @@ export default function VideoPage() {
 
       const runId: string = queueBody.runId;
       pollRef.current = { timer: null, startedAt: Date.now() };
-      setStatus("영상이 만들어지고 있습니다. 몇 분 정도 걸릴 수 있습니다…");
+      setStatus("동영상이 만들어지고 있습니다. 몇 분 정도 걸릴 수 있습니다…");
 
       await new Promise<void>((resolve) => {
         const poll = async () => {
@@ -183,7 +183,7 @@ export default function VideoPage() {
               { cache: "no-store" },
             );
             const retrieveBody = await retrieveResponse.json().catch(() => ({}));
-            if (!retrieveResponse.ok) throw new Error(retrieveBody.error || "영상 결과 확인에 실패했습니다.");
+            if (!retrieveResponse.ok) throw new Error(retrieveBody.error || "동영상 결과 확인에 실패했습니다.");
 
             if (retrieveBody.status === "completed") {
               const url: string | null = retrieveBody.url ?? null;
@@ -223,15 +223,15 @@ export default function VideoPage() {
                 status: "failed",
                 result: null,
               });
-              throw new Error("영상 생성이 거부되거나 실패했습니다.");
+              throw new Error("동영상 생성이 거부되거나 실패했습니다.");
             }
             if (Date.now() - pollRef.current.startedAt > POLL_TIMEOUT_MS) {
-              throw new Error("영상 생성이 시간 내에 끝나지 않았습니다. 잠시 후 작업 기록에서 다시 확인해 주세요.");
+              throw new Error("동영상 생성이 시간 내에 끝나지 않았습니다. 잠시 후 작업 기록에서 다시 확인해 주세요.");
             }
             pollRef.current.timer = setTimeout(poll, POLL_INTERVAL_MS);
           } catch (pollError) {
             setStatus("");
-            setError(pollError instanceof Error ? pollError.message : "영상 생성에 실패했습니다.");
+            setError(pollError instanceof Error ? pollError.message : "동영상 생성에 실패했습니다.");
             pollRef.current.timer = null;
             resolve();
           }
@@ -239,7 +239,7 @@ export default function VideoPage() {
         pollRef.current.timer = setTimeout(poll, POLL_INTERVAL_MS);
       });
     } catch (generateError) {
-      const message = generateError instanceof Error ? generateError.message : "영상 생성에 실패했습니다.";
+      const message = generateError instanceof Error ? generateError.message : "동영상 생성에 실패했습니다.";
       setStatus("");
       setError(message);
       recordJob({
@@ -278,7 +278,7 @@ export default function VideoPage() {
 
           {results.length === 0 ? (
             <div className="studio-hero">
-              <h1>영상 만들기</h1>
+              <h1>동영상 만들기</h1>
               <p>장면과 움직임을 문장으로 적어 보세요. 시작 이미지를 얹으면 그 장면에서 이어집니다.</p>
             </div>
           ) : (
@@ -292,7 +292,7 @@ export default function VideoPage() {
                   <div key={`${item.url}-${index}`} className="asset-tile video-tile">
                     <video src={item.url} controls preload="metadata" />
                     <div className="asset-overlay">
-                      <span className="asset-badge">영상</span>
+                      <span className="asset-badge">동영상</span>
                     </div>
                   </div>
                 ))}
@@ -325,7 +325,7 @@ export default function VideoPage() {
                 generate();
               }
             }}
-            placeholder="만들고 싶은 영상을 설명해 주세요."
+            placeholder="만들고 싶은 동영상을 설명해 주세요."
             rows={1}
           />
           <AttachStrip
@@ -357,16 +357,16 @@ export default function VideoPage() {
                 accept="image/*"
                 disabled={compressingVideo}
                 onPick={pickEndFrameImage}
-                title="영상이 끝나는 장면의 이미지 첨부(선택)"
+                title="동영상이 끝나는 장면의 이미지 첨부(선택)"
               />
             ) : null}
             {supportsSourceVideo ? (
               <FileChip
-                label={`원본 영상 ${sourceVideo ? 1 : 0}/${policy.sourceVideo.max}`}
+                label={`원본 동영상 ${sourceVideo ? 1 : 0}/${policy.sourceVideo.max}`}
                 accept="video/*"
                 disabled={compressingVideo}
                 onPick={pickSourceVideo}
-                title="확장·편집할 원본 영상 첨부"
+                title="확장·편집할 원본 동영상 첨부"
               />
             ) : null}
             <span className="dock-spacer" />
@@ -375,7 +375,7 @@ export default function VideoPage() {
                 시작 이미지는 전송되지 않습니다
               </span>
             ) : null}
-            <SendButton disabled={busy || compressingVideo || !prompt.trim()} onClick={generate} label="영상 생성" />
+            <SendButton disabled={busy || compressingVideo || !prompt.trim()} onClick={generate} label="동영상 생성" />
           </div>
         </div>
       </div>

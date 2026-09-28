@@ -33,7 +33,7 @@ interface Job {
   createdAt: string;
 }
 
-const MODE_LABELS: Record<string, string> = { chat: "채팅", image: "이미지", video: "영상", audio: "음성" };
+const MODE_LABELS: Record<string, string> = { chat: "채팅", image: "이미지", video: "동영상", audio: "음성" };
 
 function formatCostValue(cost: number, currency: string | null): string {
   return `${currency ?? "USD"} ${cost < 0.01 ? cost.toFixed(6) : cost.toFixed(4)}`;
@@ -126,7 +126,7 @@ export default function HistoryPage() {
             <option value="">전체</option>
             <option value="chat">채팅</option>
             <option value="image">이미지</option>
-            <option value="video">영상</option>
+            <option value="video">동영상</option>
             <option value="audio">음성</option>
           </select>
         </div>

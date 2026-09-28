@@ -270,7 +270,7 @@ export default function LibraryPage() {
     return Array.from(map.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [assets, filter]);
 
-  /* 상세 보기에서 이동할 목록: 화면에 보이는 순서의 이미지·영상. */
+  /* 상세 보기에서 이동할 목록: 화면에 보이는 순서의 이미지·동영상. */
   const viewerAssets: Array<Asset & { kind: "image" | "video" }> = useMemo(
     () =>
       groups.flatMap(([, items]) =>
@@ -300,7 +300,7 @@ export default function LibraryPage() {
         setVideoStartImage(await assetAsAttachment(asset));
         router.push("/create/video");
       } catch (actionError) {
-        setError(actionError instanceof Error ? actionError.message : "영상 만들기로 넘기지 못했습니다.");
+        setError(actionError instanceof Error ? actionError.message : "동영상 만들기로 넘기지 못했습니다.");
       }
     },
     onRemakeImage: async (asset: ViewerAsset) => {
@@ -344,7 +344,7 @@ export default function LibraryPage() {
     <div className="page-pad">
       <div className="page-head">
         <h1>라이브러리</h1>
-        <p>생성한 이미지·영상·음성이 만든 날짜별로 모입니다. 이미지·영상은 이 브라우저에도 임시 보관되어 서버 파일이 사라져도 볼 수 있습니다.</p>
+        <p>생성한 이미지·동영상·음성이 만든 날짜별로 모입니다. 이미지·동영상은 이 브라우저에도 임시 보관되어 서버 파일이 사라져도 볼 수 있습니다.</p>
       </div>
 
       <div className="lib-bar">
@@ -375,7 +375,7 @@ export default function LibraryPage() {
       <div className="muted" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, fontSize: 12.5, margin: "-4px 0 16px" }}>
         <span>
           이 기기 보관함: {formatFileSize(vaultBytes)} / {formatFileSize(MAX_TOTAL_BYTES)} · {vaultItems.length}개 ·
-          생성한 이미지·영상을 이 브라우저에 {RETENTION_DAYS}일간 보관합니다(고정한 파일은 계속 보관).
+          생성한 이미지·동영상을 이 브라우저에 {RETENTION_DAYS}일간 보관합니다(고정한 파일은 계속 보관).
         </span>
         <button type="button" className="secondary" onClick={clearVault} disabled={vaultItems.every((item) => item.pinned)}>
           보관함 비우기
@@ -396,7 +396,7 @@ export default function LibraryPage() {
           title={assets.length === 0 ? "아직 모인 자산이 없습니다" : "이 종류의 자산이 없습니다"}
           body={
             assets.length === 0
-              ? "이미지·영상·음성을 만들면 여기에 자동으로 쌓입니다. 무엇이든 하나 만들어 보세요."
+              ? "이미지·동영상·음성을 만들면 여기에 자동으로 쌓입니다. 무엇이든 하나 만들어 보세요."
               : "다른 종류를 골라 보거나 새로 만들어 보세요."
           }
         >
@@ -406,7 +406,7 @@ export default function LibraryPage() {
           </Link>
           <Link href="/create/video" className="topbar-link">
             <Icon name="video" size={15} />
-            영상 만들기
+            동영상 만들기
           </Link>
           <Link href="/create/audio" className="topbar-link">
             <Icon name="audio" size={15} />

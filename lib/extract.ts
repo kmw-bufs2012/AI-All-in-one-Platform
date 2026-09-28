@@ -1,15 +1,15 @@
 const IMAGE_KEYS = ["images", "image", "data", "b64_json", "base64", "url"];
 const WRAPPER_KEYS = ["data", "result", "output", "generation", "usage", "pricing"];
 const ID_KEYS = ["queue_id", "id", "request_id", "task_id", "job_id", "generation_id", "video_id", "uuid"];
-/* NanoGPT 영상 생성은 runId 를 돌려주고 그 값으로 /video/status 를 폴링합니다. */
+/* NanoGPT 동영상 생성은 runId 를 돌려주고 그 값으로 /video/status 를 폴링합니다. */
 const RUN_ID_KEYS = ["runId", "run_id", "requestId", "request_id", "queue_id", "id", "task_id", "job_id"];
-/* 결과 영상 URL. 모델·제공자에 따라 키 이름이 달라 영상 전용 키를 먼저 봅니다. */
+/* 결과 동영상 URL. 모델·제공자에 따라 키 이름이 달라 동영상 전용 키를 먼저 봅니다. */
 const VIDEO_URL_KEYS = ["videoUrl", "video_url", "outputUrl", "output_url", "resultUrl", "result_url"];
 const GENERIC_URL_KEYS = ["url", "video", "output", "result"];
 const STATUS_KEYS = ["status", "state"];
 /*
  * NanoGPT 공식 문서: "Every API response includes a cost field showing what
- * you were charged for that request" — 이미지 생성 응답은 cost_usd, 영상
+ * you were charged for that request" — 이미지 생성 응답은 cost_usd, 동영상
  * 생성/상태 조회 응답은 cost, 채팅은 스트리밍 마지막 청크의 usage 안에
  * cost/total_cost로 실린다고 알려져 있어 후보 키를 폭넓게 봅니다.
  */

@@ -177,12 +177,12 @@ export interface VideoInputLimit {
   family: string;
   /** 모델이 공식적으로 받는 참조 이미지 최대 수(참고용). */
   referenceImages: number;
-  /** 원본(참조) 영상 최대 수. */
+  /** 원본(참조) 동영상 최대 수. */
   videos: number;
   source: string;
 }
 
-/* 영상 생성 — 공식 입력 한도(참고 표시용). 앱은 시작 이미지 1장만 전송합니다. */
+/* 동영상 생성 — 공식 입력 한도(참고 표시용). 앱은 시작 이미지 1장만 전송합니다. */
 const VIDEO_INPUT_LIMITS: Array<{ pattern: RegExp; limit: VideoInputLimit }> = [
   { pattern: /veo-?3/i, limit: { family: "Google Veo 3.1", referenceImages: 3, videos: 0, source: "ai.google.dev/gemini-api/docs/veo" } },
   { pattern: /wan-?2[.-]7.*reference/i, limit: { family: "Wan 2.7 Reference", referenceImages: 5, videos: 3, source: "alibabacloud.com/help/en/model-studio" } },

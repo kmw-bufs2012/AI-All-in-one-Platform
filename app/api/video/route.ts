@@ -10,12 +10,12 @@ import { findVideoOverlay } from "@/lib/model-capability-overlay";
 export const maxDuration = 300;
 
 /*
- * NanoGPT 영상 생성(POST /api/generate-video)은 비동기입니다. 요청은 즉시
+ * NanoGPT 동영상 생성(POST /api/generate-video)은 비동기입니다. 요청은 즉시
  * runId 와 status: "pending" 을 돌려주고, 결과는 /api/video/status 로 폴링합니다.
  *
  * 입력 미디어는 모델마다 다릅니다.
  * - image-to-video 모델: imageDataUrl(base64) 또는 imageUrl(공개 HTTPS URL).
- * - 영상 확장·편집 모델: videoUrl.
+ * - 동영상 확장·편집 모델: videoUrl.
  * 어떤 모델이 무엇을 받는지는 /v1/video-models 의 supported_parameters 로
  * 판정해 클라이언트에서 걸러 보냅니다(lib/attachment-policy.ts).
  */
@@ -90,11 +90,11 @@ export async function POST(request: NextRequest) {
     const upstream = await queueVideo(payload);
     const bodyText = await readJson(upstream);
     if (!upstream.ok) {
-      throw politeNanoGptError(upstream, bodyText, "NanoGPT 영상 생성 요청에 실패했습니다.");
+      throw politeNanoGptError(upstream, bodyText, "NanoGPT 동영상 생성 요청에 실패했습니다.");
     }
     const runId = extractRunId(bodyText);
     if (!runId) {
-      throw new Error("영상 생성 요청 응답에서 작업 번호를 확인할 수 없습니다.");
+      throw new Error("동영상 생성 요청 응답에서 작업 번호를 확인할 수 없습니다.");
     }
     // 응답에 "runId, id, status, model, cost, remainingBalance" 형태로
     // 실제 청구액이 함께 실리는 경우가 있어(NanoGPT 공식 문서), 있으면 즉시
@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
       raw: bodyText,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "NanoGPT 영상 생성 요청에 실패했습니다.";
+    const message = error instanceof Error ? error.message : "NanoGPT 동영상 생성 요청에 실패했습니다.";
     const status = error instanceof Error && "status" in error ? Number((error as { status?: number }).status ?? 502) : 502;
     return NextResponse.json({ error: message }, { status });
   }

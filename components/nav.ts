@@ -30,10 +30,10 @@ export const TOOLS: ToolEntry[] = [
   },
   {
     href: "/create/video",
-    label: "영상",
+    label: "동영상",
     icon: "video",
     accent: "var(--tool-video)",
-    description: "장면을 설명하거나 시작 이미지를 얹어 짧은 영상을 만듭니다.",
+    description: "장면을 설명하거나 시작 이미지를 얹어 짧은 동영상을 만듭니다.",
   },
   {
     href: "/create/audio",
@@ -56,7 +56,7 @@ export const BREADCRUMBS: Record<string, [string, string] | [string]> = {
   "/": ["홈"],
   "/create/chat": ["만들기", "채팅"],
   "/create/image": ["만들기", "이미지"],
-  "/create/video": ["만들기", "영상"],
+  "/create/video": ["만들기", "동영상"],
   "/create/audio": ["만들기", "음성"],
   "/library": ["라이브러리", "전체 자산"],
   "/history": ["기록", "작업 기록"],

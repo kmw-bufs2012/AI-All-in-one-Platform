@@ -21,9 +21,9 @@ import { findChatLimit, findImageReferenceLimit, findVideoInputLimit } from "./m
  * - supported_parameters.n.max — 한 번에 만들 이미지 장수.
  * 이 값들은 모델마다 다르므로 전부 카탈로그에서 읽어 그대로 적용합니다.
  *
- * 영상 생성 모델(/v1/video-models?detailed=true):
+ * 동영상 생성 모델(/v1/video-models?detailed=true):
  * - imageUrl / imageDataUrl 파라미터가 있는 모델만 시작 이미지를 받습니다.
- * - videoUrl 파라미터가 있는 모델은 기존 영상을 확장·편집할 수 있습니다.
+ * - videoUrl 파라미터가 있는 모델은 기존 동영상을 확장·편집할 수 있습니다.
  *
  * TTS 모델(/v1/audio-models?type=tts&detailed=true): 입력이 텍스트뿐이라
  * 첨부가 없습니다. 대신 max_input_size(최대 글자 수)를 사용합니다.
@@ -186,7 +186,7 @@ export interface VideoAttachmentPolicy {
 }
 
 /*
- * 영상 모델은 supported_parameters 로 입력 방식을 판정하되, 카탈로그가 아무
+ * 동영상 모델은 supported_parameters 로 입력 방식을 판정하되, 카탈로그가 아무
  * 정보도 싣지 않은 모델(null)은 막지 않고 허용합니다. 지원하지 않는 모델에
  * 이미지를 보내면 NanoGPT가 해당 필드를 무시하거나 오류 메시지를 돌려주므로,
  * 첨부 자체를 막아 실제로 되는 모델까지 못 쓰게 하는 쪽이 더 나쁩니다.
@@ -198,12 +198,12 @@ export function resolveVideoAttachmentPolicy(model: NormalizedModel | null): Vid
   const startAllowed = model.acceptsStartImage ?? true;
   const official = findVideoInputLimit(model.id, model.name);
   const sourceAllowed = (model.acceptsSourceVideo ?? false) && (official ? official.videos > 0 : true);
-  // NanoGPT 영상 API는 시작 이미지를 imageUrl/imageDataUrl 한 개로 받습니다.
+  // NanoGPT 동영상 API는 시작 이미지를 imageUrl/imageDataUrl 한 개로 받습니다.
   return {
     startImage: { allowed: startAllowed, max: startAllowed ? 1 : 0 },
     sourceVideo: { allowed: sourceAllowed, max: sourceAllowed ? 1 : 0 },
     note: official
-      ? `${official.family} 공식 입력 한도: 참조 이미지 ${official.referenceImages}장${official.videos ? ` · 참조 영상 ${official.videos}개` : ""} (이 앱은 NanoGPT 영상 API 형식에 맞춰 시작 이미지 1장${sourceAllowed ? "·원본 영상 1개" : ""}만 전송)`
+      ? `${official.family} 공식 입력 한도: 참조 이미지 ${official.referenceImages}장${official.videos ? ` · 참조 동영상 ${official.videos}개` : ""} (이 앱은 NanoGPT 동영상 API 형식에 맞춰 시작 이미지 1장${sourceAllowed ? "·원본 동영상 1개" : ""}만 전송)`
       : null,
   };
 }

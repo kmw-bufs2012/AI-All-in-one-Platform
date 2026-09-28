@@ -6,7 +6,7 @@
  * - 인증: Authorization: Bearer <API_KEY> (일부 카탈로그 라우트는 x-api-key도
  *   허용하므로 두 헤더를 함께 보냅니다.)
  * - 채팅은 OpenAI 호환(/v1/chat/completions), 이미지는 정규화된 Image API
- *   (/v1/images, input_references), 영상은 비동기 큐(/generate-video +
+ *   (/v1/images, input_references), 동영상은 비동기 큐(/generate-video +
  *   /video/status), TTS는 동기(/v1/speech)입니다.
  */
 
@@ -89,7 +89,7 @@ export function politeNanoGptError(
 }
 
 /*
- * 모델 카탈로그. 텍스트 모델만 /v1/models 이고, 이미지·영상·오디오는 각각
+ * 모델 카탈로그. 텍스트 모델만 /v1/models 이고, 이미지·동영상·오디오는 각각
  * 전용 카탈로그 라우트를 씁니다(공식 문서: "for image, video, audio, and
  * embedding catalogs, use the dedicated model catalog endpoints").
  * detailed=true 를 붙여야 capabilities / supported_parameters /
@@ -155,7 +155,7 @@ export async function generateImage(payload: Record<string, unknown>): Promise<R
   }, 180000);
 }
 
-/** 비동기 영상 생성 요청. 응답의 runId 를 상태 조회에 사용합니다. */
+/** 비동기 동영상 생성 요청. 응답의 runId 를 상태 조회에 사용합니다. */
 export async function queueVideo(payload: Record<string, unknown>): Promise<Response> {
   return nanoFetch("/generate-video", {
     method: "POST",
@@ -164,7 +164,7 @@ export async function queueVideo(payload: Record<string, unknown>): Promise<Resp
   }, 60000);
 }
 
-/** 영상 작업 상태 조회. status 가 COMPLETED/FAILED 가 될 때까지 폴링합니다. */
+/** 동영상 작업 상태 조회. status 가 COMPLETED/FAILED 가 될 때까지 폴링합니다. */
 export async function retrieveVideo(runId: string): Promise<Response> {
   return nanoFetch(`/video/status?requestId=${encodeURIComponent(runId)}`, {}, 60000);
 }
@@ -179,7 +179,7 @@ export async function generateSpeech(payload: Record<string, unknown>): Promise<
 }
 
 /*
- * 이미지·영상 생성 화면은 선택한 모델이 supported_parameters로 공개한 값만
+ * 이미지·동영상 생성 화면은 선택한 모델이 supported_parameters로 공개한 값만
  * 그대로 NanoGPT에 전달합니다(비율·품질·스타일·길이 등, lib/models.ts의
  * ExtraParam). 클라이언트가 보내는 키·값이 요청 본문에 그대로 섞여 들어가므로,
  * model/prompt/첨부 관련 필드처럼 이 라우트가 이미 직접 채우는 예약 키는

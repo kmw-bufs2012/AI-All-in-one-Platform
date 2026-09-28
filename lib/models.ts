@@ -20,9 +20,9 @@ import {
  * - 이미지(/v1/image-models?detailed=true): supported_parameters(예:
  *   resolution=enum, n=range) 와 input_reference_constraints(max_items,
  *   min_width, min_height, max_bytes, formats).
- * - 영상(/v1/video-models?detailed=true): 모델마다 받는 입력이 달라
- *   supported_parameters 에 imageUrl/imageDataUrl(이미지→영상) 또는
- *   videoUrl(영상 확장·편집)이 나타납니다.
+ * - 동영상(/v1/video-models?detailed=true): 모델마다 받는 입력이 달라
+ *   supported_parameters 에 imageUrl/imageDataUrl(이미지→동영상) 또는
+ *   videoUrl(동영상 확장·편집)이 나타납니다.
  * - 오디오(/v1/audio-models?type=tts&detailed=true): voices, formats,
  *   max_input_size 등.
  *
@@ -40,11 +40,11 @@ export interface VoiceInfo {
 }
 
 /*
- * 이미지·영상 생성 모델이 supported_parameters로 공개한 그 밖의 설정값입니다.
+ * 이미지·동영상 생성 모델이 supported_parameters로 공개한 그 밖의 설정값입니다.
  * NanoGPT 공식 문서: "Parameter support varies by model, and parameters
  * should be treated as discoverable via supported_parameters, not as
  * globally supported fields." 그래서 비율·품질·스타일(이미지), 해상도·품질
- * (영상) 같은 값을 앱에 고정된 목록으로 두지 않고, 모델이 실제로 공개한
+ * (동영상) 같은 값을 앱에 고정된 목록으로 두지 않고, 모델이 실제로 공개한
  * 파라미터만 그대로 노출합니다. 참조 이미지·해상도·생성 장수처럼 이미 전용
  * 필드가 있는 파라미터(resolution, n, imageUrl 등)는 제외됩니다.
  */
@@ -98,7 +98,7 @@ export function filterSupportedParamValues(
 export interface ModelPricing {
   inputPer1M: number | null;
   outputPer1M: number | null;
-  /** 이미지·영상·음성처럼 요청(또는 결과물) 단위로 과금되는 모델의 단가. */
+  /** 이미지·동영상·음성처럼 요청(또는 결과물) 단위로 과금되는 모델의 단가. */
   perRequest: number | null;
   currency: string | null;
 }
@@ -147,12 +147,12 @@ export interface NormalizedModel {
   /** resolution·n·참조 이미지 외에 모델이 공개한 나머지 설정(비율·품질·스타일 등). */
   imageParams: ExtraParam[];
 
-  /* ------------------------------------------------------- 영상 생성 모델 */
+  /* ------------------------------------------------------- 동영상 생성 모델 */
   /** imageUrl / imageDataUrl 을 받는 image-to-video 계열인지. null이면 미공개. */
   acceptsStartImage: boolean | null;
-  /** videoUrl 을 받는 영상 확장·편집 계열인지. null이면 미공개. */
+  /** videoUrl 을 받는 동영상 확장·편집 계열인지. null이면 미공개. */
   acceptsSourceVideo: boolean | null;
-  /** 시작 이미지·원본 영상 외에 모델이 공개한 나머지 설정(길이·해상도·품질 등). */
+  /** 시작 이미지·원본 동영상 외에 모델이 공개한 나머지 설정(길이·해상도·품질 등). */
   videoParams: ExtraParam[];
   /**
    * 원 개발사 자료로 확인된 끝 프레임 등 추가 이미지 역할(lib/model-capability-overlay.ts).
@@ -224,7 +224,7 @@ function optionValues(value: unknown): string[] {
 /**
  * supported_parameters 는 두 가지 형태로 내려옵니다.
  * - 객체 맵: { resolution: { type: "enum", values: [...], default: "..." } }
- * - 현재 영상 카탈로그: { parameters: { duration: { options: [...] } }, defaults: {...} }
+ * - 현재 동영상 카탈로그: { parameters: { duration: { options: [...] } }, defaults: {...} }
  * - 현재 이미지 카탈로그: { resolutions: [...], aspect_ratio: [...], max_images: 4 }
  * - 문자열 배열(OpenRouter 호환): ["temperature", "tools", ...]
  * 둘 다 다룰 수 있도록 "파라미터 이름 집합"과 "이름→정의 맵"을 함께 만듭니다.
@@ -303,7 +303,7 @@ function hasParam(params: SupportedParams, ...keys: string[]): boolean {
 }
 
 /*
- * "resolution" / "n" / 참조 이미지 / 시작 이미지·원본 영상처럼 이미 전용
+ * "resolution" / "n" / 참조 이미지 / 시작 이미지·원본 동영상처럼 이미 전용
  * 필드로 뽑아 쓰는 파라미터를 뺀 나머지를 그대로 노출합니다. supported_parameters
  * 가 문자열 배열(값 정의 없음)로만 온 경우는 컨트롤을 만들 수 없어 건너뜁니다.
  */
@@ -349,7 +349,7 @@ function extractExtraParams(params: SupportedParams, excludeKeys: Set<string>): 
 
 /*
  * 가격. 텍스트 모델은 토큰 단가(pricing.prompt / pricing.completion, 토큰 1개
- * 기준 문자열)로 내려오므로 1M 토큰 기준으로 환산합니다. 이미지·영상·음성
+ * 기준 문자열)로 내려오므로 1M 토큰 기준으로 환산합니다. 이미지·동영상·음성
  * 모델은 요청 단위 단가가 내려오는 경우가 있어 perRequest 로 따로 담습니다.
  */
 function extractPricing(raw: Record<string, unknown>): ModelPricing | null {
@@ -370,7 +370,7 @@ function extractPricing(raw: Record<string, unknown>): ModelPricing | null {
     ?? asNumber(candidate.audio)
     ?? asNumber(raw.cost_per_image)
     ?? asNumber(raw.costPerImage)
-    // pricing 자체가 숫자 한 개로 오는 카탈로그(이미지·영상)도 있습니다.
+    // pricing 자체가 숫자 한 개로 오는 카탈로그(이미지·동영상)도 있습니다.
     ?? asNumber(raw.pricing)
     ?? asNumber(raw.cost)
     ?? asNumber(raw.price);
@@ -446,7 +446,7 @@ function lookupFlag(raw: Record<string, unknown>, names: string[]): boolean | nu
 /*
  * architecture.modality 는 "text+image->text" 처럼 입력·출력 모달리티를 한
  * 문자열로 표현합니다. input_modalities 배열이 없는 응답에서도 이 문자열로
- * 이미지·영상·오디오 입력 여부를 알 수 있습니다.
+ * 이미지·동영상·오디오 입력 여부를 알 수 있습니다.
  */
 function modalityInputs(architecture: Record<string, unknown>): string[] {
   const explicit = asStringArray(architecture.input_modalities ?? architecture.inputModalities);
@@ -550,11 +550,11 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const imageParams = kind === "image" ? extractExtraParams(params, imageExclude) : [];
 
   /*
-   * 영상 생성 입력(시작 이미지) 판정.
+   * 동영상 생성 입력(시작 이미지) 판정.
    *
    * 이전 구현은 "supported_parameters에 imageUrl류 키가 없고, 그 밖의
    * 파라미터(duration 등)는 있음(paramsKnown=true)"이면 곧바로 false로
-   * 단정했습니다. 그런데 실제 NanoGPT 영상 API 조사 결과, 다음 두 가지가
+   * 단정했습니다. 그런데 실제 NanoGPT 동영상 API 조사 결과, 다음 두 가지가
    * 확인됩니다.
    *   1) 실제 요청 필드로 imageUrl / imageDataUrl 이 여러 모델에서 통용됩니다
    *      (예: kling-v21-pro 요청 예시에 "imageUrl": "https://..." 가 그대로
@@ -593,7 +593,7 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     : mentions(haystack, /extend|video[- ]?to[- ]?video|\bv2v\b|video[- ]?edit/)
       ? true
       : null;
-  // 시작 이미지·원본 영상 입력 파라미터는 빼고, 나머지(길이·해상도·품질 등)를
+  // 시작 이미지·원본 동영상 입력 파라미터는 빼고, 나머지(길이·해상도·품질 등)를
   // 모델별 설정 컨트롤로 그대로 넘깁니다.
   const videoExclude = new Set([
     "imageurl", "image_url", "imagedataurl", "image_data_url", "image", "input_references", "start_image", "init_image",
@@ -679,8 +679,8 @@ export function modelDisplayLabel(model: NormalizedModel): string {
       badges.push(`참조 ${model.maxInputReferences}`);
     }
   } else if (model.kind === "video") {
-    if (model.acceptsStartImage) badges.push("이미지→영상");
-    if (model.acceptsSourceVideo) badges.push("영상 확장");
+    if (model.acceptsStartImage) badges.push("이미지→동영상");
+    if (model.acceptsSourceVideo) badges.push("동영상 확장");
   }
   if (model.uncensored) badges.push("무검열");
   const suffix = badges.length ? ` (${badges.join(" / ")})` : "";
