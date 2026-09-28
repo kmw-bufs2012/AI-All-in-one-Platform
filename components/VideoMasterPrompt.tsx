@@ -7,6 +7,7 @@ import { resolveChatAttachmentPolicy, isVideoCapableModel, MAX_TOTAL_FRAMES } fr
 import { uploadFiles, extractVideoFrames, attachmentBlob, type AttachedFile } from "@/lib/client-api";
 import {
   buildDirectPrompt,
+  checkMasterPrompt,
   extractMasterPrompt,
   readVideoMeta,
   streamChat,
@@ -98,6 +99,7 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
   }
 
   const masterPrompt = output ? extractMasterPrompt(output) : "";
+  const structure = masterPrompt && !running ? checkMasterPrompt(masterPrompt) : null;
 
   async function copy() {
     try {
@@ -112,7 +114,9 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
     <div className="panel" style={{ marginBottom: 16 }}>
       <h2 style={{ fontSize: 15, marginBottom: 6 }}>동영상 → Seedance 2.0 Mini 마스터 프롬프트</h2>
       <p className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>
-        동영상을 첨부하면 같은 동영상을 다시 만들 수 있는 복붙용 프롬프트를 선택한 모델로 생성합니다. Seedance 2.0 Mini는
+        동영상을 첨부하면 같은 동영상을 다시 만들 수 있는 복붙용 프롬프트를 선택한 모델로 생성합니다. 프롬프트는 항상
+        동영상 스타일 → 캐릭터 스타일 → 배경 → 초 단위 메인 프롬프트(카메라샷·동작·캐릭터 일관성) → 네거티브 프롬프트 →
+        모션 강도 순서로 작성됩니다. Seedance 2.0 Mini는
         한 번에 최대 15초까지 생성하므로, 더 긴 동영상은 앞 15초를 기준으로 작성합니다.
       </p>
       <div className="stack">
@@ -152,6 +156,22 @@ export function VideoMasterPrompt({ onSave }: { onSave: (name: string, content: 
           <div>
             <label>복붙용 마스터 프롬프트</label>
             <textarea readOnly value={masterPrompt} style={{ minHeight: 220, fontFamily: "monospace", fontSize: 12.5 }} />
+            {structure ? (
+              structure.ok ? (
+                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                  ✓ 필수 구성 확인: 동영상 스타일 · 캐릭터 스타일 · 배경 → 초 단위 메인 프롬프트(카메라샷·동작) → 네거티브 프롬프트 → 모션 강도
+                </div>
+              ) : (
+                <div className="error-box" style={{ marginTop: 6 }}>
+                  필수 구성이 일부 빠졌습니다.
+                  {structure.missing.length > 0 ? ` 누락: ${structure.missing.join(", ")}.` : ""}
+                  {structure.outOfOrder ? " 구역 순서가 맞지 않습니다." : ""}
+                  {!structure.hasTimestamps ? " 메인 프롬프트가 초 단위 구간으로 나뉘지 않았습니다." : ""}
+                  {structure.hasTimestamps && !structure.shotsComplete ? " 일부 구간에 카메라샷(Camera) 또는 동작(Action)이 없습니다." : ""}
+                  {" "}다시 생성해 주세요.
+                </div>
+              )
+            ) : null}
             {masterPrompt !== output.trim() && !running ? (
               <details style={{ marginTop: 6 }}>
                 <summary className="muted" style={{ fontSize: 12 }}>설정 참고 및 전체 응답 보기</summary>
