@@ -312,3 +312,42 @@
 | `kling-video-o1` | Kling Video O1 | 1장 | 1장 (`image_tail`) | - | 길이(초), 비율, 원본 소리 유지, 생성 방식 |
 | `kling-video-o1-standard` | Kling Video O1 Standard | 1장 | 1장 (`image_tail`) | - | 길이(초), 원본 소리 유지, 생성 방식 |
 | `kandinsky5-pro` | Kandinsky 5 Pro | 1장 | - | - | 해상도, 비율 |
+
+## Seedance · MiniMax · Wan · Kling 입력 한도 (2026-09-29 조사)
+
+요청 1건은 동영상 1개를 만듭니다. 네 계열 모두 출력 개수 파라미터가 없습니다. 여러 개가 필요하면 앱의 "동시 생성"(최대 4건)으로 같은 요청을 나란히 보냅니다.
+
+| 계열 / 모델 | 참조 이미지 | 참조 동영상 | 참조 오디오 | 앱 전송 필드 | 근거 |
+|---|---|---|---|---|---|
+| MiniMax H3 (`minimax-h3`, `minimax/h3-max`, `…/reference-to-video`) | 9 | 3 | 받음(개수 미공개) | reference_images / reference_videos | NanoGPT 카탈로그 "Up to 9 / Up to 3" |
+| MiniMax Hailuo 02·2.3 | 시작 1 (+끝 1) | 0 | – | imageUrl | platform.minimax.io |
+| Seedance 2.0 / Fast / Mini / Doubao | 9 | 3 (총 15초) | 3 | reference_images / reference_videos | BytePlus·seed.bytedance.com, NanoGPT 카탈로그 |
+| Seedance 2.0 Video Edit 계열 | 9 | 원본 1 | 받음 | reference_images + videoUrl | NanoGPT 카탈로그 |
+| Seedance 2.x Spicy / 2.5 | 시작 1 (+끝 1) | 0 | – | imageUrl, last_image | NanoGPT 카탈로그(참조 파라미터 없음) |
+| Wan 3.0 Reference | 공식 10 | 공식 5 (총 15초) | 공식 5 | 시작 이미지만 (NanoGPT 미공개) | Alibaba Model Studio |
+| Wan 2.7 Reference / `wan-2.7-video` | 공식 5 | 공식 3 | – | 시작 이미지·원본 동영상만 | Alibaba Model Studio |
+| Wan 2.6 (`wan-wavespeed-26`) | 3 | – | – | referenceImages (배열) | docs.nano-gpt.com Reference-to-Video |
+| Wan 2.6 Reference Flash | 0 | 공식 1~3 | – | 시작 이미지만 | fal.ai, aimlapi |
+| Kling O1 (`kling-video-o1`, `-standard`) | 7 (동영상 포함 시 4) | 1 | – | referenceImages (배열) | kling.ai O1 가이드, docs.nano-gpt.com |
+| Kling 3.0 Omni / O3 | 7 (동영상 포함 시 4) | 1 | – | 시작 이미지·원본 동영상 | kling.ai 3.0 Omni API |
+| Kling 3.0 (v30 std/pro) | 시작 1 + 끝 1, element_list 최대 3개(요소당 2~4장) | 0 | – | imageUrl, element_list(텍스트) | kling.ai, kie.ai·magichour.ai |
+| Kling 1.x/2.x | 시작 1 (+끝 image_tail 1) | 0 | – | imageUrl | kling.ai image2video |
+
+"공식"은 원 개발사 한도입니다. NanoGPT가 해당 입력 파라미터를 공개하지 않은 모델은 추측해서 보내지 않습니다. 이런 모델은 화면에 안내만 표시합니다.
+
+## NanoGPT 단가 표시
+
+`lib/nanogpt-pricing.ts`는 카탈로그 `pricing` 원문을 읽습니다. 지금 설정(해상도·길이·모드·오디오·렌더링 속도)에 맞는 칸을 찾아 NanoGPT 단가를 계산합니다. 형태가 특수한 2개 모델은 계산하지 않고 요금표 원문만 보여 줍니다(`ltx-2.3-quality` 메가픽셀 과금, `pixelcut` 프레임 과금).
+
+- 이미지: 239/239개 모델 계산
+- 동영상: 173/175개 모델 계산
+
+## 무검열 표시
+
+아래 조건 중 하나에 해당하면 모델명 옆에 "(무검열)"을 붙입니다.
+
+- NanoGPT 텍스트 카탈로그의 `category: "Uncensored"` (32개)
+- 이미지·동영상 카탈로그의 `nsfw: true`
+- 이름·설명의 표식: uncensored, abliterated, obliterated, derestricted, heretic, unshackled, spicy 등
+
+2026-09-29 기준 해당 모델 수: 텍스트 37개, 이미지 36개, 동영상 76개.

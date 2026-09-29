@@ -3,6 +3,7 @@
 import { MediaCostEstimate } from "@/components/MediaCostEstimate";
 import { useState } from "react";
 import { Icon } from "@/components/Icon";
+import { quoteNanoGpt } from "@/lib/nanogpt-pricing";
 import {
   DynamicParamsPanel,
   type ParamValues,
@@ -69,7 +70,9 @@ export default function ImagePage() {
   const resolutions = models.selected?.resolutions ?? [];
   const activeResolution = resolutions.includes(resolution) ? resolution : DEFAULT_RESOLUTION;
   const maxOutputImages = models.selected?.maxOutputImages ?? 1;
-  const unitPrice = models.selected?.pricing?.perRequest ?? null;
+  // NanoGPT 요금표에서 지금 고른 해상도·비율·속도에 맞는 장당 단가(lib/nanogpt-pricing.ts).
+  const unitPrice = quoteNanoGpt(models.selected?.pricingTable, { kind: "image", params: paramValues, count: 1 })?.usd
+    ?? models.selected?.pricing?.perRequest ?? null;
 
   function changeParam(key: string, value: string | number | undefined) {
     setParamValues((previous) => {
@@ -261,6 +264,7 @@ export default function ImagePage() {
             resolution={activeResolution === DEFAULT_RESOLUTION ? null : activeResolution}
             catalogUnitPrice={models.selected?.pricing?.perRequest ?? null}
             catalogCurrency={models.selected?.pricing?.currency ?? null}
+            pricingTable={models.selected?.pricingTable ?? null}
           />
 
           {jobs.length > 0 ? (

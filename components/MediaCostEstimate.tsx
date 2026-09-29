@@ -2,6 +2,7 @@
 
 import { estimateMediaCost } from "@/lib/media-pricing";
 import { estimateImageTokens, estimateTokens } from "@/lib/cost";
+import { describeNanoGptPricing, quoteNanoGpt } from "@/lib/nanogpt-pricing";
 
 /*
  * 현재 선택한 모델·설정으로 결과물을 만들 때의 예상 토큰과 예상 비용을
@@ -20,7 +21,13 @@ export function MediaCostEstimate({
   prompt = "",
   referenceImages = 0,
   catalogInputPer1M = null,
+  pricingTable = null,
+  inputs = {},
 }: {
+  /** NanoGPT 카탈로그 요금표 원문. 있으면 현재 설정에 맞는 NanoGPT 단가를 정확히 계산합니다. */
+  pricingTable?: Record<string, unknown> | null;
+  /** 동영상 입력 상황(요금이 모드별로 다른 모델용). */
+  inputs?: { hasStartImage?: boolean; referenceImages?: number; referenceVideos?: number; hasSourceVideo?: boolean };
   /** 모델 표시 이름. ID 표기가 달라도 공식 단가 규칙을 찾는 데 씁니다. */
   modelName?: string | null;
   /** 입력 토큰 추정용 프롬프트. */
@@ -49,7 +56,21 @@ export function MediaCostEstimate({
       }
     : single;
   const count = estimate?.count ?? 1;
-  const catalogTotal = catalogUnitPrice !== null ? catalogUnitPrice * (kind === "image" ? count : multiplier) : null;
+  const imageCount = Math.max(1, Number(params.n ?? params.num_images ?? count) || 1);
+  const nanoQuote = quoteNanoGpt(pricingTable, { kind, params, count: kind === "image" ? imageCount : 1, ...inputs });
+  const nanoTable = describeNanoGptPricing(pricingTable);
+  const catalogTotal = nanoQuote
+    ? nanoQuote.usd * (kind === "video" ? multiplier : 1)
+    : catalogUnitPrice !== null ? catalogUnitPrice * (kind === "image" ? count : multiplier) : null;
+  const nanoBasis = nanoQuote ? `${nanoQuote.basis}${kind === "video" && multiplier > 1 ? ` × ${multiplier}개` : ""}${nanoQuote.minimumOnly ? " (최소 요금)" : ""}` : null;
+  const nanoDetails = nanoTable.length ? (
+    <details className="media-estimate-foot">
+      <summary>NanoGPT 요금표 전체 (카탈로그 원문)</summary>
+      <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
+        {nanoTable.map((line) => <li key={line}>{line}</li>)}
+      </ul>
+    </details>
+  ) : null;
   // 공식 단가·카탈로그 건당 단가가 모두 없어도 입력 토큰 추정은 항상 보여 줍니다.
   const inputTokens = (prompt.trim() ? estimateTokens(prompt) : 0) + estimateImageTokens(referenceImages);
   const inputTokenCost = catalogInputPer1M !== null ? (inputTokens / 1_000_000) * catalogInputPer1M * multiplier : null;
@@ -105,7 +126,7 @@ export function MediaCostEstimate({
             </div>
             {catalogTotal !== null ? (
               <div>
-                <div className="media-estimate-label">NanoGPT 카탈로그 단가</div>
+                <div className="media-estimate-label">NanoGPT 단가 (실제 청구 기준)</div>
                 <div className="media-estimate-value">
                   {catalogCurrency ?? "USD"} {catalogTotal.toFixed(4)}
                 </div>
@@ -123,19 +144,23 @@ export function MediaCostEstimate({
           {estimate.routes?.length ? (
             <div className="media-estimate-foot">제3자 라우팅 참고 단가: {estimate.routes.join(" · ")}</div>
           ) : null}
+          {nanoBasis ? <div className="media-estimate-foot">NanoGPT: {nanoBasis}</div> : null}
+          {nanoDetails}
           <div className="media-estimate-foot">출처: {estimate.source}. 실제 청구액은 NanoGPT 단가를 따르며 생성 후 표시됩니다.</div>
         </>
       ) : (
         <>
           <div className="media-estimate-grid">
             <div>
-              <div className="media-estimate-label">NanoGPT 카탈로그 단가</div>
+              <div className="media-estimate-label">NanoGPT 단가 (실제 청구 기준)</div>
               <div className="media-estimate-value">
                 {catalogCurrency ?? "USD"} {catalogTotal!.toFixed(4)}
               </div>
             </div>
           </div>
-          <div className="media-estimate-foot">이 모델은 제작사 공식 단가를 확인하지 못해 NanoGPT 카탈로그 값만 표시합니다.</div>
+          {nanoBasis ? <div className="media-estimate-foot">NanoGPT: {nanoBasis}</div> : null}
+          {nanoDetails}
+          <div className="media-estimate-foot">이 모델은 제작사 공식 단가를 확인하지 못해 NanoGPT 단가만 표시합니다.</div>
         </>
       )}
     </div>

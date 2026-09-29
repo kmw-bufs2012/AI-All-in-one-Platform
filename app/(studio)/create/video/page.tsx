@@ -8,6 +8,7 @@ import {
 } from "@/components/DynamicParams";
 import { useStudioState } from "@/components/StudioState";
 import { useModels } from "@/components/useModels";
+import { quoteNanoGpt } from "@/lib/nanogpt-pricing";
 import { AttachmentMedia, AttachStrip, FileChip, ModelChip, ModelDetail, NewSessionButton, SelectChip, SendButton } from "@/components/studio-ui";
 import { GenerationTile, useNow, type GenerationJob } from "@/components/GenerationProgress";
 import { INLINE_BUDGET_CHARS } from "@/lib/inline-media";
@@ -33,6 +34,7 @@ export default function VideoPage() {
   const [prompt, setPrompt] = useStudioState<string>("video:prompt", "");
   const [startImage, setStartImage] = useStudioState<AttachedFile | null>("video:startImage", null);
   const [refImages, setRefImages] = useStudioState<AttachedFile[]>("video:refImages", []);
+  const [refVideos, setRefVideos] = useStudioState<AttachedFile[]>("video:refVideos", []);
   const [sourceVideo, setSourceVideo] = useStudioState<AttachedFile | null>("video:sourceVideo", null);
   const [endFrameImage, setEndFrameImage] = useStudioState<AttachedFile | null>("video:endFrameImage", null);
   const [paramValues, setParamValues] = useStudioState<ParamValues>("video:params", {});
@@ -83,7 +85,18 @@ export default function VideoPage() {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   })();
   const pricing = models.selected?.pricing ?? null;
-  const unitPrice = pricing?.perRequest
+  // NanoGPT 요금표(해상도·길이·모드·오디오별)에서 지금 설정에 맞는 칸을 찾습니다(lib/nanogpt-pricing.ts).
+  const nanoQuote = quoteNanoGpt(models.selected?.pricingTable, {
+    kind: "video",
+    params: catalogSeconds !== null && durationKey ? { [durationKey.key]: catalogSeconds, ...paramValues } : paramValues,
+    count: 1,
+    hasStartImage: Boolean(startImage) && policy.startImage.allowed,
+    referenceImages: policy.referenceImages.allowed ? refImages.length : 0,
+    referenceVideos: policy.referenceVideos.allowed ? refVideos.length : 0,
+    hasSourceVideo: Boolean(sourceVideo) && policy.sourceVideo.allowed,
+  });
+  const unitPrice = nanoQuote?.usd
+    ?? pricing?.perRequest
     ?? (pricing?.perSecond != null && catalogSeconds !== null ? pricing.perSecond * catalogSeconds : null);
   const currency = pricing?.currency ?? null;
 
@@ -172,6 +185,32 @@ export default function VideoPage() {
     }
   }
 
+  // 참조 동영상 여러 개(reference_videos 등). R2 서명 URL로 보내므로 R2가 필요합니다.
+  async function pickRefVideos(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (files.length === 0) return;
+    setError("");
+    const max = policy.referenceVideos.max;
+    if (refVideos.length + files.length > max) {
+      setError(`이 모델은 참조 동영상을 최대 ${max}개까지 첨부할 수 있습니다.`);
+      return;
+    }
+    if (files.some((file) => file.size > MAX_VIDEO_BYTES)) {
+      setError("참조 동영상은 한 개당 50MB 이하만 첨부할 수 있습니다.");
+      return;
+    }
+    try {
+      setCompressingVideo(files.some((file) => needsVideoCompression(file)));
+      const uploaded = await uploadFiles(files);
+      setRefVideos((prev) => [...prev, ...uploaded].slice(0, max));
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "동영상 업로드에 실패했습니다.");
+    } finally {
+      setCompressingVideo(false);
+    }
+  }
+
   async function pickEndFrameImage(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -217,6 +256,7 @@ export default function VideoPage() {
     setPrompt("");
     setStartImage(null);
     setRefImages([]);
+    setRefVideos([]);
     setSourceVideo(null);
     setEndFrameImage(null);
     setResults([]);
@@ -258,7 +298,8 @@ export default function VideoPage() {
     setEstimate(unitPrice !== null ? { amount: unitPrice * count, currency, actual: false } : null);
     const supportsRefImages = policy.referenceImages.allowed;
     const sentRefImages = supportsRefImages ? refImages.slice(0, policy.referenceImages.max) : [];
-    const attachments = [startImage, sourceVideo, endFrameImage, ...sentRefImages].filter((item): item is AttachedFile => Boolean(item));
+    const sentRefVideos = policy.referenceVideos.allowed ? refVideos.slice(0, policy.referenceVideos.max) : [];
+    const attachments = [startImage, sourceVideo, endFrameImage, ...sentRefImages, ...sentRefVideos].filter((item): item is AttachedFile => Boolean(item));
     const errors: string[] = [];
 
     // 서버 임시 저장소에서 첨부가 사라져도 되도록 브라우저 7일 보관 사본을 함께 보냅니다
@@ -311,6 +352,8 @@ export default function VideoPage() {
             referenceImageIds: sentRefImages.length ? sentRefImages.map((item) => item.id) : undefined,
             referenceImageDataUrls: sentRefImages.length ? referenceImageDataUrls : undefined,
             referenceImageKey: sentRefImages.length ? policy.referenceImages.key : undefined,
+            referenceVideoIds: sentRefVideos.length ? sentRefVideos.map((item) => item.id) : undefined,
+            referenceVideoKey: sentRefVideos.length ? policy.referenceVideos.key : undefined,
             params: {
               ...filterSupportedParamValues(model.videoParams, paramValues),
               ...(negativeSupported && textParams.negative_prompt ? { negative_prompt: textParams.negative_prompt.slice(0, 500) } : {}),
@@ -410,11 +453,18 @@ export default function VideoPage() {
             prompt={prompt}
             referenceImages={(startImage ? 1 : 0) + (endFrameImage ? 1 : 0) + (policy.referenceImages.allowed ? refImages.length : 0)}
             catalogInputPer1M={models.selected?.pricing?.inputPer1M ?? null}
-            params={paramValues}
+            params={catalogSeconds !== null && durationKey ? { [durationKey.key]: catalogSeconds, ...paramValues } : paramValues}
             resolution={null}
             multiplier={Number(batchCount) || 1}
             catalogUnitPrice={unitPrice}
             catalogCurrency={currency}
+            pricingTable={models.selected?.pricingTable ?? null}
+            inputs={{
+              hasStartImage: Boolean(startImage) && supportsStartImage,
+              referenceImages: policy.referenceImages.allowed ? refImages.length : 0,
+              referenceVideos: policy.referenceVideos.allowed ? refVideos.length : 0,
+              hasSourceVideo: Boolean(sourceVideo) && supportsSourceVideo,
+            }}
           />
           {appliedNote ? <p className="muted" style={{ fontSize: 11.5, marginBottom: 8 }}>{appliedNote}</p> : null}
           {droppedNote ? <p className="muted" style={{ fontSize: 11.5, marginBottom: 8 }}>{droppedNote}</p> : null}
@@ -541,9 +591,10 @@ export default function VideoPage() {
             rows={1}
           />
           <AttachStrip
-            files={[startImage, endFrameImage, sourceVideo, ...refImages].filter((item): item is AttachedFile => Boolean(item))}
+            files={[startImage, endFrameImage, sourceVideo, ...refImages, ...refVideos].filter((item): item is AttachedFile => Boolean(item))}
             onRemove={(id) => {
               setRefImages((prev) => prev.filter((item) => item.id !== id));
+              setRefVideos((prev) => prev.filter((item) => item.id !== id));
               if (startImage?.id === id) setStartImage(null);
               if (endFrameImage?.id === id) setEndFrameImage(null);
               if (sourceVideo?.id === id) setSourceVideo(null);
@@ -572,6 +623,16 @@ export default function VideoPage() {
                 disabled={compressingVideo}
                 onPick={pickRefImages}
                 title={`참조 이미지 여러 장 첨부 (NanoGPT 카탈로그 기준 최대 ${policy.referenceImages.max}장)`}
+              />
+            ) : null}
+            {policy.referenceVideos.allowed ? (
+              <FileChip
+                label={`참조 동영상 ${refVideos.length}/${policy.referenceVideos.max}`}
+                accept="video/*"
+                multiple
+                disabled={compressingVideo}
+                onPick={pickRefVideos}
+                title={`참조 동영상 여러 개 첨부 (최대 ${policy.referenceVideos.max}개)`}
               />
             ) : null}
             {supportsEndFrame ? (

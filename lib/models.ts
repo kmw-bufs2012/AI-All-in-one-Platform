@@ -139,6 +139,8 @@ export interface NormalizedModel {
   description: string;
   uncensored: boolean;
   pricing: ModelPricing | null;
+  /** NanoGPT 카탈로그 pricing 객체 원문(해상도·길이·모드별 요금표). lib/nanogpt-pricing.ts 가 읽습니다. */
+  pricingTable: Record<string, unknown> | null;
 
   /* ---------------------------------------------------------- 채팅 모델 */
   /*
@@ -192,6 +194,8 @@ export interface NormalizedModel {
    * 예: reference_images(최대 9장). 없으면 null — 시작 이미지 1장만 보냅니다.
    */
   videoReferenceImages: { key: string; max: number } | null;
+  /** 참조 동영상 여러 개 입력 파라미터(예: reference_videos 최대 3개). 없으면 null. */
+  videoReferenceVideos: { key: string; max: number } | null;
   /** videoUrl 을 받는 동영상 확장·편집 계열인지. null이면 미공개. */
   acceptsSourceVideo: boolean | null;
   /** 시작 이미지·원본 동영상 외에 모델이 공개한 나머지 설정(길이·해상도·품질 등). */
@@ -766,8 +770,28 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
       ?? findVideoInputLimit(id, name)?.referenceImages
       ?? 4
     : null;
+  const officialVideoLimit = kind === "video" ? findVideoInputLimit(id, name) : null;
   const videoReferenceImages = kind === "video" && videoReferenceKey && videoReferenceMax && videoReferenceMax > 0
     ? { key: params.original[videoReferenceKey] ?? videoReferenceKey, max: videoReferenceMax }
+    // 카탈로그엔 없지만 NanoGPT 문서가 referenceImages 배열로 받는다고 밝힌 모델(Kling O1·Wan 2.6).
+    : officialVideoLimit?.apiReferenceImagesKey && officialVideoLimit.referenceImages > 0
+      ? { key: officialVideoLimit.apiReferenceImagesKey, max: officialVideoLimit.referenceImages }
+      : null;
+  // 참조 동영상 여러 개(reference_videos). 장수: 설명의 "Up to N" → 공식 한도 → 3.
+  const videoReferenceVideoKey = ["reference_videos", "referencevideos", "reference_video_urls", "video_urls"]
+    .find((key) => params.names.has(key));
+  const describedVideoMax = videoReferenceVideoKey
+    ? /up to\s+(\d+)/i.exec(asString(params.defs[videoReferenceVideoKey]?.description))?.[1]
+    : undefined;
+  const videoReferenceVideoMax = videoReferenceVideoKey
+    ? (describedVideoMax ? Number(describedVideoMax) : null) ?? (officialVideoLimit?.videos || null) ?? 3
+    : officialVideoLimit?.apiReferenceVideosKey ? officialVideoLimit.videos : 0;
+  const videoReferenceVideos = kind === "video" && videoReferenceVideoMax > 0
+    ? videoReferenceVideoKey
+      ? { key: params.original[videoReferenceVideoKey] ?? videoReferenceVideoKey, max: videoReferenceVideoMax }
+      : officialVideoLimit?.apiReferenceVideosKey
+        ? { key: officialVideoLimit.apiReferenceVideosKey, max: videoReferenceVideoMax }
+        : null
     : null;
   // 끝 프레임 입력(예: last_image). 카탈로그가 공개한 모델은 오버레이 없이도 끝 프레임을 받습니다.
   const endFrameKey = ["last_image", "end_image", "image_tail", "tail_image", "last_frame_image", "lastframeimage"]
@@ -833,9 +857,14 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
      * 두는 경우가 많습니다(예: "DeepSeek V4 Flash Vision Exp Uncensored").
      * 그래서 플래그가 있으면 그것을 쓰고, 없으면 이름·설명·태그에서 찾습니다.
      */
-    uncensored: lookupFlag(raw, ["uncensored", "isUncensored", "nsfw", "is_nsfw"])
-      ?? mentions(haystack, /uncensored|unfiltered|abliterated|derestricted|jailbroken|\bnsfw\b/),
+    // NanoGPT 텍스트 카탈로그는 무검열 모델을 category: "Uncensored" 로 분류하고(2026-09-29 기준 32개),
+    // 이미지·동영상 카탈로그는 nsfw: true 로 표시합니다. 둘 다 없으면 이름·설명의 표식을 봅니다
+    // (obliterated·heretic·unshackled·spicy 등, 예: wan-22-spicy 는 플래그 없이 이름에만 표시).
+    uncensored: /^uncensored$/i.test(asString(raw.category))
+      || lookupFlag(raw, ["uncensored", "isUncensored", "nsfw", "is_nsfw"]) === true
+      || mentions(haystack, /uncensored|unfiltered|abliterat|obliterat|derestricted|jailbroken|heretic|unshackled|low-refusal|\bspicy\b|\bnsfw\b/),
     pricing: extractPricing(raw),
+    pricingTable: raw.pricing && typeof raw.pricing === "object" && !Array.isArray(raw.pricing) ? (raw.pricing as Record<string, unknown>) : null,
 
     vision,
     videoInput,
@@ -859,6 +888,7 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
 
     acceptsStartImage,
     videoReferenceImages,
+    videoReferenceVideos,
     acceptsSourceVideo,
     videoParams,
     extraImageRoles,
@@ -891,8 +921,9 @@ export function modelDisplayLabel(model: NormalizedModel): string {
     if (model.acceptsStartImage) badges.push("이미지→동영상");
     if (model.acceptsSourceVideo) badges.push("동영상 확장");
   }
-  if (model.uncensored) badges.push("무검열");
+  // 무검열 모델은 모델명 바로 옆에 "(무검열)"을 붙입니다.
+  const uncensoredMark = model.uncensored ? " (무검열)" : "";
   const suffix = badges.length ? ` (${badges.join(" / ")})` : "";
   const context = model.contextWindow ? ` · ${Math.round(model.contextWindow / 1000)}k` : "";
-  return `${model.name}${suffix}${context}`;
+  return `${model.name}${uncensoredMark}${suffix}${context}`;
 }
