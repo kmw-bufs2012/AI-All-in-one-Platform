@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "node:path";
 import { queueVideo, politeNanoGptError, readJson, sanitizeExtraParams } from "@/lib/nanogpt";
 import { extractRunId, extractStatus, extractCost } from "@/lib/extract";
-import { findAttachment, getObjectBuffer } from "@/lib/object-store";
+import { findAttachment, getObjectBuffer, presignedGetUrl } from "@/lib/object-store";
 import { findVideoOverlay } from "@/lib/model-capability-overlay";
 
 // Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
@@ -27,6 +27,27 @@ async function resolveDataUrl(id: string): Promise<string | null> {
   return `data:${found.mime};base64,${buffer.toString("base64")}`;
 }
 
+const REFERENCE_FIELDS = new Set([
+  "reference_images", "referenceimages", "reference_image_urls", "referenceimageurls",
+  "reference_image_data_urls", "referenceimagedataurls", "image_urls", "imageurls", "imagedataurls", "input_references",
+]);
+const MAX_REFERENCE_IMAGES = 16;
+
+/*
+ * "이미지 URL"을 받는 파라미터(last_image·reference_images)용 주소.
+ * R2 에 있으면 NanoGPT 가 직접 받을 수 있는 서명 URL(1시간), 아니면 data URL.
+ */
+async function resolveImageUrl(id: string): Promise<string | null> {
+  const found = await findAttachment(id).catch(() => null);
+  if (found) {
+    const signed = await presignedGetUrl(found.key).catch(() => null);
+    if (signed) return signed;
+  }
+  return resolveDataUrl(id);
+}
+
+const END_FRAME_FIELDS = new Set(["last_image", "end_image", "image_tail", "tail_image", "last_frame_image", "lastframeimage"]);
+
 export async function POST(request: NextRequest) {
   let body: {
     model?: unknown;
@@ -34,10 +55,16 @@ export async function POST(request: NextRequest) {
     startImageId?: unknown;
     sourceVideoId?: unknown;
     endImageId?: unknown;
+    /** 카탈로그에서 찾은 끝 프레임 필드 이름(예: last_image). 허용 목록에 있어야 합니다. */
+    endImageField?: unknown;
     /** 브라우저 7일 보관 사본. 서버 디스크에 없을 때 대신 씁니다(lib/inline-media.ts). */
     startImageDataUrl?: unknown;
     sourceVideoDataUrl?: unknown;
     endImageDataUrl?: unknown;
+    /** 참조 이미지 여러 장(카탈로그가 공개한 파라미터 이름과 함께). */
+    referenceImageIds?: unknown;
+    referenceImageDataUrls?: unknown;
+    referenceImageKey?: unknown;
     params?: unknown;
   };
   try {
@@ -71,14 +98,39 @@ export async function POST(request: NextRequest) {
   let endImageField: string | null = null;
   if (typeof body.endImageId === "string") {
     const overlay = findVideoOverlay(model, model);
-    const endFrameRole = overlay?.imageRoles?.find((role) => role.role === "end_frame");
-    if (endFrameRole) {
-      const dataUrl = (await resolveDataUrl(body.endImageId)) ?? acceptDataUrl(body.endImageDataUrl, "image");
+    const overlayField = overlay?.imageRoles?.find((role) => role.role === "end_frame")?.field;
+    const requested = typeof body.endImageField === "string" && END_FRAME_FIELDS.has(body.endImageField.toLowerCase())
+      ? body.endImageField
+      : null;
+    const field = overlayField ?? requested;
+    if (field) {
+      // URL 을 받는 필드(last_image 등)는 서명 URL, 오버레이 필드(예: Kling image_tail)는 data URL.
+      const dataUrl = (requested && !overlayField ? await resolveImageUrl(body.endImageId) : await resolveDataUrl(body.endImageId))
+        ?? acceptDataUrl(body.endImageDataUrl, "image");
       if (!dataUrl) missing.push("끝 프레임");
       if (dataUrl) {
-        payload[endFrameRole.field] = dataUrl;
-        endImageField = endFrameRole.field;
+        payload[field] = dataUrl;
+        endImageField = field;
       }
+    }
+  }
+  // 참조 이미지 여러 장. 필드 이름은 카탈로그에서 찾은 값이지만 클라이언트가 보내므로,
+  // 허용 목록에 있는 이름만 받습니다.
+  let referenceField: string | null = null;
+  const referenceKey = typeof body.referenceImageKey === "string" ? body.referenceImageKey : "";
+  if (Array.isArray(body.referenceImageIds) && REFERENCE_FIELDS.has(referenceKey.toLowerCase())) {
+    const ids = (body.referenceImageIds as unknown[]).filter((id): id is string => typeof id === "string").slice(0, MAX_REFERENCE_IMAGES);
+    const inlineList = Array.isArray(body.referenceImageDataUrls) ? (body.referenceImageDataUrls as unknown[]) : [];
+    const urls: string[] = [];
+    for (let index = 0; index < ids.length; index++) {
+      const url = (await resolveImageUrl(ids[index])) ?? acceptDataUrl(inlineList[index], "image");
+      if (url) urls.push(url);
+      else missing.push(`참조 이미지 ${index + 1}`);
+    }
+    if (urls.length > 0) {
+      // NanoGPT 카탈로그는 이 값을 "JSON array of image URLs" 텍스트로 받습니다.
+      payload[referenceKey] = JSON.stringify(urls);
+      referenceField = referenceKey;
     }
   }
   if (missing.length > 0) {
@@ -87,6 +139,7 @@ export async function POST(request: NextRequest) {
   // 길이·해상도·품질 등 모델이 supported_parameters로 공개한 나머지 설정.
   const reservedKeys = new Set(["model", "prompt", "imagedataurl", "videodataurl", "imageurl", "videourl"]);
   if (endImageField) reservedKeys.add(endImageField.toLowerCase());
+  if (referenceField) reservedKeys.add(referenceField.toLowerCase());
   const extraParams = sanitizeExtraParams(body.params, reservedKeys);
   if (typeof extraParams.seed === "string" && /^\d+$/.test(extraParams.seed)) extraParams.seed = Number(extraParams.seed);
   Object.assign(payload, extraParams);

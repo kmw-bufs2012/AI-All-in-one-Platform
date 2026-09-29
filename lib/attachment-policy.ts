@@ -153,22 +153,22 @@ export interface ImageAttachmentPolicy {
 
 const DEFAULT_REFERENCE_FORMATS = ["png", "jpeg", "webp"];
 /*
- * 카탈로그가 max_items 를 싣지 않은 모델의 기본 허용 장수. 공식 Image API 의
- * input_reference_constraints 예시 값(4)을 그대로 씁니다.
+ * 카탈로그가 입력 장수를 싣지 않은 모델의 기본 허용 장수.
+ * NanoGPT 카탈로그(2026-09 확인)에서 여러 장을 받는 모델은 모두 max_input_images 를
+ * 공개하고, 공개하지 않은 모델은 업스케일러·배경 제거·단일 이미지 편집기처럼 한 장만
+ * 받는 도구였습니다. 그래서 1장을 기본으로 합니다.
  */
-const DEFAULT_MAX_REFERENCES = 4;
+const DEFAULT_MAX_REFERENCES = 1;
 
 export function resolveImageAttachmentPolicy(model: NormalizedModel | null): ImageAttachmentPolicy {
   // null(미공개)이면 막지 않고 기본값을 씁니다. 지원하지 않는 모델은 API가
   // input_references 를 무시하거나 오류로 알려 줍니다.
-  // 카탈로그 값과 원 개발사 공식 한도가 모두 있으면 작은 값을 씁니다.
+  // NanoGPT 카탈로그(input_reference_constraints.max_items 또는 input_references 범위)가
+  // 공개한 장수를 가장 먼저 씁니다. NanoGPT 가 실제로 받는 한도이기 때문입니다(예: Seedream 5.0 Pro 10장).
+  // 카탈로그에 값이 없을 때만 원 개발사 공식 한도, 그것도 없으면 기본값을 씁니다.
   const official = model ? findImageReferenceLimit(model.id, model.name) : null;
   const catalogMax = model?.maxInputReferences ?? null;
-  const max = !model
-    ? 0
-    : catalogMax !== null && official
-      ? Math.min(catalogMax, official.max)
-      : catalogMax ?? official?.max ?? DEFAULT_MAX_REFERENCES;
+  const max = !model ? 0 : catalogMax ?? official?.max ?? DEFAULT_MAX_REFERENCES;
   const formats = model?.referenceFormats?.length ? model.referenceFormats : DEFAULT_REFERENCE_FORMATS;
   return {
     reference: { allowed: max > 0, max },
@@ -181,6 +181,8 @@ export function resolveImageAttachmentPolicy(model: NormalizedModel | null): Ima
 export interface VideoAttachmentPolicy {
   startImage: AttachmentSlot;
   sourceVideo: AttachmentSlot;
+  /** 참조 이미지 여러 장(카탈로그가 공개한 파라미터·최대 장수). key 는 요청 필드 이름입니다. */
+  referenceImages: AttachmentSlot & { key: string | null };
   /** 모델이 공식적으로 받는 입력 한도 안내(앱은 시작 이미지 1장만 전송). */
   note: string | null;
 }
@@ -193,18 +195,28 @@ export interface VideoAttachmentPolicy {
  */
 export function resolveVideoAttachmentPolicy(model: NormalizedModel | null): VideoAttachmentPolicy {
   if (!model) {
-    return { startImage: { allowed: false, max: 0 }, sourceVideo: { allowed: false, max: 0 }, note: null };
+    return {
+      startImage: { allowed: false, max: 0 },
+      sourceVideo: { allowed: false, max: 0 },
+      referenceImages: { allowed: false, max: 0, key: null },
+      note: null,
+    };
   }
   const startAllowed = model.acceptsStartImage ?? true;
   const official = findVideoInputLimit(model.id, model.name);
   const sourceAllowed = (model.acceptsSourceVideo ?? false) && (official ? official.videos > 0 : true);
   // NanoGPT 동영상 API는 시작 이미지를 imageUrl/imageDataUrl 한 개로 받습니다.
+  // 참조 이미지 여러 장은 NanoGPT 카탈로그가 그 파라미터와 최대 장수를 공개한 모델에서만 받습니다.
+  const refs = model.videoReferenceImages;
   return {
     startImage: { allowed: startAllowed, max: startAllowed ? 1 : 0 },
     sourceVideo: { allowed: sourceAllowed, max: sourceAllowed ? 1 : 0 },
-    note: official
-      ? `${official.family} 공식 입력 한도: 참조 이미지 ${official.referenceImages}장${official.videos ? ` · 참조 동영상 ${official.videos}개` : ""} (이 앱은 NanoGPT 동영상 API 형식에 맞춰 시작 이미지 1장${sourceAllowed ? "·원본 동영상 1개" : ""}만 전송)`
-      : null,
+    referenceImages: refs ? { allowed: true, max: refs.max, key: refs.key } : { allowed: false, max: 0, key: null },
+    note: refs
+      ? `NanoGPT 카탈로그 기준: 참조 이미지 최대 ${refs.max}장(${refs.key})${official ? ` · ${official.family} 공식 한도 참조 이미지 ${official.referenceImages}장` : ""}`
+      : official
+        ? `${official.family} 공식 입력 한도: 참조 이미지 ${official.referenceImages}장${official.videos ? ` · 참조 동영상 ${official.videos}개` : ""} (NanoGPT 카탈로그가 여러 장 입력 파라미터를 공개하지 않아 시작 이미지 1장${sourceAllowed ? "·원본 동영상 1개" : ""}만 전송)`
+        : null,
   };
 }
 

@@ -1,6 +1,6 @@
 import { modelDescription } from "./model-descriptions";
 import { findImageSettingsOverlay, mergeOfficialImageParams } from "./image-settings-overlay";
-import { findUncensoredFamily } from "./model-attachment-limits";
+import { findUncensoredFamily, findVideoInputLimit } from "./model-attachment-limits";
 import {
   findVideoOverlay,
   applyDurationOverlay,
@@ -165,6 +165,11 @@ export interface NormalizedModel {
   /* ------------------------------------------------------- 동영상 생성 모델 */
   /** imageUrl / imageDataUrl 을 받는 image-to-video 계열인지. null이면 미공개. */
   acceptsStartImage: boolean | null;
+  /**
+   * 동영상 모델의 참조 이미지 여러 장 입력 파라미터(카탈로그 supported_parameters 기준).
+   * 예: reference_images(최대 9장). 없으면 null — 시작 이미지 1장만 보냅니다.
+   */
+  videoReferenceImages: { key: string; max: number } | null;
   /** videoUrl 을 받는 동영상 확장·편집 계열인지. null이면 미공개. */
   acceptsSourceVideo: boolean | null;
   /** 시작 이미지·원본 동영상 외에 모델이 공개한 나머지 설정(길이·해상도·품질 등). */
@@ -247,14 +252,20 @@ function optionValues(value: unknown): string[] {
 interface SupportedParams {
   names: Set<string>;
   defs: Record<string, Record<string, unknown>>;
+  /** 소문자 키 → 카탈로그에 적힌 원래 키(요청에 그대로 써야 하는 이름). */
+  original: Record<string, string>;
 }
 
 function readSupportedParams(raw: Record<string, unknown>): SupportedParams {
   const source = raw.supported_parameters ?? raw.supportedParameters ?? raw.parameters;
   const names = new Set<string>();
   const defs: Record<string, Record<string, unknown>> = {};
+  const original: Record<string, string> = {};
   if (Array.isArray(source)) {
-    for (const name of asStringArray(source)) names.add(name.toLowerCase());
+    for (const name of asStringArray(source)) {
+      names.add(name.toLowerCase());
+      original[name.toLowerCase()] = name;
+    }
   } else {
     const sourceRecord = asRecord(source);
     const nestedParameters = asRecord(sourceRecord.parameters);
@@ -266,6 +277,7 @@ function readSupportedParams(raw: Record<string, unknown>): SupportedParams {
     for (const [key, value] of entries) {
       const normalizedKey = key.toLowerCase();
       names.add(normalizedKey);
+      original[normalizedKey] = key;
       if (Array.isArray(value)) {
         defs[normalizedKey] = { values: value };
         continue;
@@ -280,7 +292,7 @@ function readSupportedParams(raw: Record<string, unknown>): SupportedParams {
       if (typeof value === "number") defs[normalizedKey] = { max: value };
     }
   }
-  return { names, defs };
+  return { names, defs, original };
 }
 
 function paramValues(params: SupportedParams, ...keys: string[]): string[] {
@@ -307,7 +319,7 @@ function paramMax(params: SupportedParams, ...keys: string[]): number | null {
   for (const key of keys) {
     const def = params.defs[key.toLowerCase()];
     if (!def) continue;
-    const max = asNumber(def.max ?? def.maximum);
+    const max = asNumber(def.max ?? def.maximum ?? def.max_items ?? def.maxItems);
     if (max !== null) return max;
   }
   return null;
@@ -324,11 +336,24 @@ function hasParam(params: SupportedParams, ...keys: string[]): boolean {
  */
 function extractExtraParams(params: SupportedParams, excludeKeys: Set<string>): ExtraParam[] {
   const result: ExtraParam[] = [];
-  for (const [key, def] of Object.entries(params.defs)) {
-    if (excludeKeys.has(key)) continue;
+  for (const [lowerKey, def] of Object.entries(params.defs)) {
+    if (excludeKeys.has(lowerKey)) continue;
+    // 요청에는 카탈로그에 적힌 원래 이름(예: generateAudio)을 그대로 써야 합니다.
+    const key = params.original[lowerKey] ?? lowerKey;
+    const declaredTypeEarly = asString(def.type).toLowerCase();
+    // 켜기/끄기(switch·boolean) 설정은 "true"/"false" 선택지로 보여 주고, 서버에서 불리언으로 바꿔 보냅니다.
+    if (declaredTypeEarly === "switch" || declaredTypeEarly === "boolean" || typeof def.default === "boolean") {
+      result.push({
+        key,
+        kind: "enum",
+        values: ["true", "false"],
+        default: typeof def.default === "boolean" ? String(def.default) : null,
+      });
+      continue;
+    }
     const values = optionValues(def.values ?? def.enum ?? def.options);
     const min = asNumber(def.min ?? def.minimum);
-    const max = asNumber(def.max ?? def.maximum);
+    const max = asNumber(def.max ?? def.maximum ?? def.max_items ?? def.maxItems);
     const step = asNumber(def.step);
     const defaultValue = typeof def.default === "string" || typeof def.default === "number" ? def.default : null;
     const declaredType = asString(def.type).toLowerCase();
@@ -367,6 +392,24 @@ function extractExtraParams(params: SupportedParams, excludeKeys: Set<string>): 
  * 기준 문자열)로 내려오므로 1M 토큰 기준으로 환산합니다. 이미지·동영상·음성
  * 모델은 요청 단위 단가가 내려오는 경우가 있어 perRequest 로 따로 담습니다.
  */
+/*
+ * NanoGPT 카탈로그의 단가는 숫자 하나이거나 해상도별 객체입니다
+ * (예: per_image: { "1k": 0.02, "2k": 0.06, "auto": 0.02 },
+ *      per_second_by_resolution: { "720p": 0.08, "1080p": 0.12 }).
+ * 객체면 기본 해상도 → auto/default → 가장 싼 값 순으로 하나를 고릅니다.
+ */
+function tieredPrice(value: unknown, defaultKey?: string): number | null {
+  const direct = asNumber(value);
+  if (direct !== null) return direct;
+  const record = asRecord(value);
+  const entries = Object.entries(record)
+    .map(([key, price]) => [key, asNumber(price)] as const)
+    .filter((entry): entry is readonly [string, number] => entry[1] !== null);
+  if (entries.length === 0) return null;
+  const pick = (key: string | undefined) => (key ? entries.find(([k]) => k.toLowerCase() === key.toLowerCase())?.[1] : undefined);
+  return pick(defaultKey) ?? pick("auto") ?? pick("default") ?? Math.min(...entries.map(([, price]) => price));
+}
+
 function extractPricing(raw: Record<string, unknown>): ModelPricing | null {
   const candidate = asRecord(raw.pricing ?? raw.cost ?? raw.price);
   const currency = asString(candidate.currency || candidate.unit) || "USD";
@@ -377,7 +420,8 @@ function extractPricing(raw: Record<string, unknown>): ModelPricing | null {
   const outputPer1M = perTokenOut !== null ? perTokenOut * 1_000_000 : null;
 
   const perRequest =
-    asNumber(candidate.per_image)
+    tieredPrice(candidate.per_image, asString(candidate.default_resolution))
+    ?? tieredPrice(candidate.per_video, asString(candidate.default_resolution))
     ?? asNumber(candidate.image)
     ?? asNumber(candidate.per_request)
     ?? asNumber(candidate.request)
@@ -390,7 +434,13 @@ function extractPricing(raw: Record<string, unknown>): ModelPricing | null {
     ?? asNumber(raw.price);
 
   // 초당 단가를 건당 단가로 읽으면 동영상 비용이 길이만큼 틀어지므로 따로 담습니다.
-  const perSecond = asNumber(candidate.per_second ?? candidate.perSecond);
+  const rawPricing = asRecord(candidate.raw);
+  const defaultRes = asString(candidate.default_resolution) || asString(rawPricing.defaultResolution) || undefined;
+  // raw 에는 "imageToVideoPricesPerSecond"·"withAudioPricesPerSecond" 같은 해상도별 초당 단가가 들어 있습니다.
+  const rawPerSecondKey = Object.keys(rawPricing).find((key) => /PricesPerSecond$/i.test(key));
+  const perSecond = tieredPrice(candidate.per_second ?? candidate.perSecond, defaultRes)
+    ?? tieredPrice(candidate.per_second_by_resolution, defaultRes)
+    ?? (rawPerSecondKey ? tieredPrice(rawPricing[rawPerSecondKey], defaultRes) : null);
   if (inputPer1M === null && outputPer1M === null && perRequest === null && perSecond === null) return null;
   return { inputPer1M, outputPer1M, perRequest, perSecond, currency };
 }
@@ -545,11 +595,26 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
    * 이미지 생성 참조 이미지 제약. 카탈로그가 값을 싣지 않으면 null(미공개)로
    * 두고, 정책 단계에서 기본 허용치를 적용합니다.
    */
-  const maxInputReferences = asNumber(constraints.max_items ?? constraints.maxItems)
+  /*
+   * NanoGPT 이미지 카탈로그(/api/v1/image-models?detailed=true, 2026-09 확인)는 입력
+   * 이미지 한도를 supported_parameters.max_input_images 와
+   * supported_parameters.input_image_constraints.{max_items, route.max_bytes, route.formats}
+   * 로 공개합니다. 예전 필드(input_reference_constraints·input_references 범위)도 함께 읽습니다.
+   * capabilities.image_to_image 가 false 이고 입력 모달리티에 image 가 없으면
+   * (text-to-image 전용 경로) 참조 이미지를 받지 않습니다.
+   */
+  const spRecord = asRecord(raw.supported_parameters ?? raw.supportedParameters);
+  const imageConstraints = asRecord(spRecord.input_image_constraints ?? spRecord.inputImageConstraints);
+  const imageRoute = asRecord(imageConstraints.route);
+  const noImageInput = capabilities.image_to_image === false && inputModalities.length > 0 && !inputModalities.includes("image");
+  const catalogInputMax = asNumber(spRecord.max_input_images ?? spRecord.maxInputImages)
+    ?? asNumber(imageConstraints.max_items ?? imageConstraints.maxItems)
+    ?? asNumber(constraints.max_items ?? constraints.maxItems)
     ?? paramMax(params, "input_references", "imageDataUrls", "images")
     ?? null;
-  const referenceFormats = asStringArray(constraints.formats ?? constraints.supported_formats);
-  const referenceMaxBytes = asNumber(constraints.max_bytes ?? constraints.maxBytes);
+  const maxInputReferences = kind === "image" && noImageInput ? 0 : catalogInputMax;
+  const referenceFormats = asStringArray(imageRoute.formats ?? constraints.formats ?? constraints.supported_formats);
+  const referenceMaxBytes = asNumber(imageRoute.max_bytes ?? constraints.max_bytes ?? constraints.maxBytes);
 
   const resolutions = paramValues(params, "resolution", "resolutions", "size", "sizes");
   const defaultResolution = paramDefault(params, "resolution", "size");
@@ -562,6 +627,8 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const imageExclude = new Set([
     "resolution", "resolutions", "size", "sizes", "n", "num_images", "numimages",
     "input_references", "imagedataurl", "imagedataurls", "image_url", "images", "imageurl",
+    // 한도 정보(설정 컨트롤이 아님)
+    "max_images", "max_output_images", "max_input_images", "input_image_constraints", "fixed_image_count",
   ]);
   // 카탈로그가 공개하지 않은 설정은 제작사 공식 문서로 확인한 값으로 보강합니다
   // (lib/image-settings-overlay.ts).
@@ -606,6 +673,29 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
           && !mentions(haystack, /image|i2v|unified|multi-?modal|first[- ]?frame/)
         ? false
         : null;
+  // 참조 이미지를 여러 장 받는 동영상 파라미터. 카탈로그가 공개한 최대 장수를 그대로 씁니다.
+  const videoReferenceKey = [
+    "reference_images", "referenceimages", "reference_image_urls", "referenceimageurls",
+    "reference_image_data_urls", "referenceimagedataurls", "image_urls", "imageurls", "imagedataurls", "input_references",
+  ].find((key) => params.names.has(key));
+  // NanoGPT 동영상 카탈로그는 reference_images 를 "JSON array of image URLs" 텍스트로 공개하고
+  // 장수는 설명에만 적습니다(예: minimax-h3 "Up to 9 reference images"). 설명에 장수가 없으면
+  // 원 개발사 공식 한도(lib/model-attachment-limits.ts), 그것도 없으면 4장을 씁니다.
+  const referenceDescription = videoReferenceKey ? asString(params.defs[videoReferenceKey]?.description) : "";
+  const describedMax = /up to\s+(\d+)/i.exec(referenceDescription)?.[1];
+  const videoReferenceMax = videoReferenceKey
+    ? paramMax(params, videoReferenceKey)
+      ?? (describedMax ? Number(describedMax) : null)
+      ?? asNumber(constraints.max_items ?? constraints.maxItems)
+      ?? findVideoInputLimit(id, name)?.referenceImages
+      ?? 4
+    : null;
+  const videoReferenceImages = kind === "video" && videoReferenceKey && videoReferenceMax && videoReferenceMax > 0
+    ? { key: params.original[videoReferenceKey] ?? videoReferenceKey, max: videoReferenceMax }
+    : null;
+  // 끝 프레임 입력(예: last_image). 카탈로그가 공개한 모델은 오버레이 없이도 끝 프레임을 받습니다.
+  const endFrameKey = ["last_image", "end_image", "image_tail", "tail_image", "last_frame_image", "lastframeimage"]
+    .find((key) => params.names.has(key));
   const videoParam = hasParam(params, "videourl", "video_url", "videodataurl", "source_video");
   const acceptsSourceVideo = videoParam
     ? true
@@ -618,6 +708,9 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const videoExclude = new Set([
     "imageurl", "image_url", "imagedataurl", "image_data_url", "image", "input_references", "start_image", "init_image",
     "videourl", "video_url", "videodataurl", "source_video",
+    "reference_images", "referenceimages", "reference_image_urls", "referenceimageurls",
+    "reference_image_data_urls", "referenceimagedataurls", "image_urls", "imageurls", "imagedataurls",
+    "last_image", "end_image", "image_tail", "tail_image", "last_frame_image", "lastframeimage",
   ]);
   const rawVideoParams = kind === "video" ? extractExtraParams(params, videoExclude) : [];
   // 값 목록·범위 없이 이름만 공개된 자유 입력 파라미터(예: negative_prompt, seed).
@@ -625,6 +718,9 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     if (videoExclude.has(key) || imageExclude.has(key)) return false;
     const def = params.defs[key];
     if (!def) return true;
+    // 켜기/끄기 설정은 extractExtraParams 가 선택 컨트롤로 따로 만듭니다.
+    const type = asString(def.type).toLowerCase();
+    if (type === "switch" || type === "boolean" || typeof def.default === "boolean") return false;
     return optionValues(def.values ?? def.enum ?? def.options).length === 0
       && asNumber(def.min ?? def.minimum) === null
       && asNumber(def.max ?? def.maximum) === null;
@@ -635,7 +731,10 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const videoParams = videoOverlay?.duration
     ? applyDurationOverlay(rawVideoParams, videoOverlay.duration)
     : rawVideoParams;
-  const extraImageRoles = videoOverlay?.imageRoles ?? [];
+  const extraImageRoles: ImageRoleOverlay[] = [...(videoOverlay?.imageRoles ?? [])];
+  if (kind === "video" && endFrameKey && !extraImageRoles.some((role) => role.role === "end_frame")) {
+    extraImageRoles.push({ role: "end_frame", field: params.original[endFrameKey] ?? endFrameKey, max: 1, labelKo: "끝 프레임" });
+  }
   const durationNote = videoOverlay?.duration?.note ?? null;
 
   const voiceResult = extractVoices(raw, params);
@@ -683,6 +782,7 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     imageParams,
 
     acceptsStartImage,
+    videoReferenceImages,
     acceptsSourceVideo,
     videoParams,
     extraImageRoles,
