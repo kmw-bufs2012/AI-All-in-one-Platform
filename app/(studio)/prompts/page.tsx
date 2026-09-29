@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { StorageNotice } from "@/components/StorageNotice";
 import { formatKst } from "@/lib/time";
 import { useRouter } from "next/navigation";
 import { Icon } from "@/components/Icon";
@@ -104,6 +105,7 @@ export default function PromptsPage() {
         <h1>프롬프트</h1>
         <p>자주 쓰는 문장을 저장해 두고 채팅 입력창으로 바로 불러옵니다.</p>
       </div>
+      <StorageNotice what="저장한 프롬프트" />
 
       <VideoMasterPrompt onSave={saveGenerated} />
 

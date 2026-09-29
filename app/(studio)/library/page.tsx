@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { StorageNotice } from "@/components/StorageNotice";
 import { kstDateKey, parseUtc } from "@/lib/time";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -346,8 +347,12 @@ export default function LibraryPage() {
     <div className="page-pad">
       <div className="page-head">
         <h1>라이브러리</h1>
-        <p>생성한 이미지·동영상·음성이 만든 날짜별로 모입니다. 이미지·동영상은 이 브라우저에도 임시 보관되어 서버 파일이 사라져도 볼 수 있습니다.</p>
+        <p>생성한 이미지·동영상·음성이 만든 날짜별로 모입니다.</p>
       </div>
+      <StorageNotice
+        what="결과 파일과 작업 기록"
+        extra="이미지·동영상은 빠른 열람을 위해 이 브라우저에도 7일간 사본을 보관합니다."
+      />
 
       <div className="lib-bar">
         <div className="seg" role="group" aria-label="자산 종류 필터">

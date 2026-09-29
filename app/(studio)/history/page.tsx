@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { StorageNotice } from "@/components/StorageNotice";
 import { formatKst } from "@/lib/time";
 import { Lightbox } from "@/components/studio-ui";
 
@@ -119,6 +120,7 @@ export default function HistoryPage() {
         <h1>작업 기록</h1>
         <p>수행한 작업의 모델·프롬프트·사용량·비용이 남습니다. 결과물만 보려면 라이브러리를 이용하세요.</p>
       </div>
+      <StorageNotice what="작업 기록" extra="시각은 대한민국 시각(KST)으로 표시합니다." />
 
       <div className="filters">
         <div className="field">

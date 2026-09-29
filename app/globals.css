@@ -3043,3 +3043,29 @@ button.new-session-button {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* 저장 위치 안내 */
+.storage-notice {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: -6px 0 16px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.storage-notice-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.storage-notice.warn .storage-notice-dot { background: #f59e0b; }
+.storage-notice.error { color: var(--danger); background: var(--danger-soft); }
+.storage-notice.error .storage-notice-dot { background: var(--danger); }
