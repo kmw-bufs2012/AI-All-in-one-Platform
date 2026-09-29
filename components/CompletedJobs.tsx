@@ -61,14 +61,24 @@ export function CompletedJobs() {
   const [, setVideoPrompt] = useStudioState<string>("video:prompt", "");
   const [, setAudioInput] = useStudioState<string>("audio:input", "");
 
+  // 작업 기록 저장·조회 실패를 알려, 목록이 비어 보이는 이유를 확인할 수 있게 합니다.
+  const [warning, setWarning] = useState("");
+
   const load = useCallback(async () => {
     try {
       const response = await fetch("/api/jobs", { cache: "no-store" });
       const body = await response.json().catch(() => ({}));
       if (response.ok && Array.isArray(body.jobs)) setJobs(body.jobs);
+      else if (!response.ok) setWarning(body.error || `작업 기록을 불러오지 못했습니다. (HTTP ${response.status})`);
     } catch {
       // 목록을 못 불러와도 화면은 그대로 둡니다.
     }
+  }, []);
+
+  useEffect(() => {
+    const onError = (event: Event) => setWarning(String((event as CustomEvent).detail ?? "작업 기록 저장에 실패했습니다."));
+    window.addEventListener("jobs:error", onError);
+    return () => window.removeEventListener("jobs:error", onError);
   }, []);
 
   useEffect(() => {
@@ -162,6 +172,12 @@ export function CompletedJobs() {
               × 완료 항목 지우기
             </button>
           </div>
+          {warning ? (
+            <div className="jobs-warning">
+              {warning}
+              <button type="button" className="jobs-clear" onClick={() => setWarning("")}>닫기</button>
+            </div>
+          ) : null}
           {items.length === 0 ? (
             <div className="jobs-empty">완료된 작업이 없습니다.</div>
           ) : (

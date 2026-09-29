@@ -3029,3 +3029,17 @@ button.new-session-button {
   place-items: center;
   background: var(--surface-2, rgba(127, 127, 127, 0.12));
 }
+
+.jobs-warning {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin: 8px 10px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}

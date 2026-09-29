@@ -293,7 +293,23 @@ export async function checkR2(): Promise<{ enabled: boolean; ok: boolean; detail
     const probeKey = `healthcheck/${Date.now()}.txt`;
     await putObject(probeKey, Buffer.from("ok"), "text/plain");
     await deleteObject(probeKey);
-    return { enabled: true, ok: true, detail: "읽기·쓰기 모두 정상입니다.", endpointHost, bucket };
+    // 작업 기록·프롬프트가 쓰는 JSON 문서 조건부 갱신도 시험합니다(새 문서 → 갱신 → 삭제).
+    const docKey = `healthcheck/doc-${Date.now()}.json`;
+    await updateJsonDoc<number[], void>(docKey, [], (items) => ({ next: [...items, 1], result: undefined }));
+    await updateJsonDoc<number[], void>(docKey, [], (items) => ({ next: [...items, 2], result: undefined }));
+    const doc = await readJsonDoc<number[]>(docKey, []);
+    await deleteObject(docKey);
+    const jobs = await readJsonDoc<unknown[]>("records/jobs.json", []).catch(() => null);
+    const docOk = doc.length === 2;
+    return {
+      enabled: true,
+      ok: docOk,
+      detail: docOk
+        ? `읽기·쓰기 모두 정상입니다. (기록 문서 갱신 정상 · 조건부 쓰기 ${conditionalWritesSupported ? "사용" : "미지원→일반 쓰기"} · 저장된 작업 기록 ${jobs ? jobs.length : "읽기 실패"}건)`
+        : `기록 문서 갱신 결과가 맞지 않습니다(기대 2개, 실제 ${doc.length}개).`,
+      endpointHost,
+      bucket,
+    };
   } catch (error) {
     return { enabled: true, ok: false, detail: error instanceof Error ? error.message : String(error), endpointHost, bucket };
   }
