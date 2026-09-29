@@ -302,6 +302,9 @@ export default function VideoPage() {
             startImageId: supportsStartImage ? startImage?.id : undefined,
             sourceVideoId: supportsSourceVideo ? sourceVideo?.id : undefined,
             endImageId: supportsEndFrame ? endFrameImage?.id : undefined,
+            endImageField: supportsEndFrame
+              ? models.selected?.extraImageRoles.find((role) => role.role === "end_frame")?.field
+              : undefined,
             startImageDataUrl,
             endImageDataUrl,
             sourceVideoDataUrl,

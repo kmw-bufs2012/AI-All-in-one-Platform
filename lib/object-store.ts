@@ -382,3 +382,18 @@ export async function readJsonDoc<T>(key: string, fallback: T): Promise<T> {
   const { data } = await readJsonWithEtag<T>(key);
   return data ?? fallback;
 }
+
+/*
+ * 외부 서비스(NanoGPT 등)가 직접 내려받을 수 있는 R2 임시 주소(서명된 GET URL).
+ * last_image·reference_images 처럼 "이미지 URL"을 받는 동영상 파라미터에 씁니다.
+ * R2 가 꺼져 있으면 null(호출하는 쪽이 data URL 로 대신 보냅니다).
+ */
+export async function presignedGetUrl(key: string, expiresSeconds = 3600): Promise<string | null> {
+  const config = r2Config();
+  const clean = safeKey(key);
+  if (!config || !clean) return null;
+  const url = new URL(objectUrl(config, clean));
+  url.searchParams.set("X-Amz-Expires", String(expiresSeconds));
+  const signed = await config.client.sign(url.toString(), { method: "GET", aws: { signQuery: true } });
+  return signed.url;
+}

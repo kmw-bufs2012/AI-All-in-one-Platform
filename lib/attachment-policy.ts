@@ -153,10 +153,12 @@ export interface ImageAttachmentPolicy {
 
 const DEFAULT_REFERENCE_FORMATS = ["png", "jpeg", "webp"];
 /*
- * 카탈로그가 max_items 를 싣지 않은 모델의 기본 허용 장수. 공식 Image API 의
- * input_reference_constraints 예시 값(4)을 그대로 씁니다.
+ * 카탈로그가 입력 장수를 싣지 않은 모델의 기본 허용 장수.
+ * NanoGPT 카탈로그(2026-09 확인)에서 여러 장을 받는 모델은 모두 max_input_images 를
+ * 공개하고, 공개하지 않은 모델은 업스케일러·배경 제거·단일 이미지 편집기처럼 한 장만
+ * 받는 도구였습니다. 그래서 1장을 기본으로 합니다.
  */
-const DEFAULT_MAX_REFERENCES = 4;
+const DEFAULT_MAX_REFERENCES = 1;
 
 export function resolveImageAttachmentPolicy(model: NormalizedModel | null): ImageAttachmentPolicy {
   // null(미공개)이면 막지 않고 기본값을 씁니다. 지원하지 않는 모델은 API가

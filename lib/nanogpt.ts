@@ -215,7 +215,10 @@ export function sanitizeExtraParams(
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
     if (!PARAM_KEY_PATTERN.test(key)) continue;
     if (reservedKeys.has(key.toLowerCase())) continue;
-    if (typeof value === "string" && value.length > 0 && value.length <= 500) {
+    if (value === "true" || value === "false") {
+      // 켜기/끄기 설정(예: generateAudio)은 문자열이 아니라 불리언으로 보냅니다.
+      result[key] = value === "true";
+    } else if (typeof value === "string" && value.length > 0 && value.length <= 500) {
       result[key] = value;
     } else if (typeof value === "number" && Number.isFinite(value)) {
       const bounds = NUMERIC_PARAM_BOUNDS[key.toLowerCase()];
