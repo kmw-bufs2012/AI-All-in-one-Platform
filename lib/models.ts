@@ -165,6 +165,11 @@ export interface NormalizedModel {
   /* ------------------------------------------------------- 동영상 생성 모델 */
   /** imageUrl / imageDataUrl 을 받는 image-to-video 계열인지. null이면 미공개. */
   acceptsStartImage: boolean | null;
+  /**
+   * 동영상 모델의 참조 이미지 여러 장 입력 파라미터(카탈로그 supported_parameters 기준).
+   * 예: reference_images(최대 9장). 없으면 null — 시작 이미지 1장만 보냅니다.
+   */
+  videoReferenceImages: { key: string; max: number } | null;
   /** videoUrl 을 받는 동영상 확장·편집 계열인지. null이면 미공개. */
   acceptsSourceVideo: boolean | null;
   /** 시작 이미지·원본 동영상 외에 모델이 공개한 나머지 설정(길이·해상도·품질 등). */
@@ -247,14 +252,20 @@ function optionValues(value: unknown): string[] {
 interface SupportedParams {
   names: Set<string>;
   defs: Record<string, Record<string, unknown>>;
+  /** 소문자 키 → 카탈로그에 적힌 원래 키(요청에 그대로 써야 하는 이름). */
+  original: Record<string, string>;
 }
 
 function readSupportedParams(raw: Record<string, unknown>): SupportedParams {
   const source = raw.supported_parameters ?? raw.supportedParameters ?? raw.parameters;
   const names = new Set<string>();
   const defs: Record<string, Record<string, unknown>> = {};
+  const original: Record<string, string> = {};
   if (Array.isArray(source)) {
-    for (const name of asStringArray(source)) names.add(name.toLowerCase());
+    for (const name of asStringArray(source)) {
+      names.add(name.toLowerCase());
+      original[name.toLowerCase()] = name;
+    }
   } else {
     const sourceRecord = asRecord(source);
     const nestedParameters = asRecord(sourceRecord.parameters);
@@ -266,6 +277,7 @@ function readSupportedParams(raw: Record<string, unknown>): SupportedParams {
     for (const [key, value] of entries) {
       const normalizedKey = key.toLowerCase();
       names.add(normalizedKey);
+      original[normalizedKey] = key;
       if (Array.isArray(value)) {
         defs[normalizedKey] = { values: value };
         continue;
@@ -280,7 +292,7 @@ function readSupportedParams(raw: Record<string, unknown>): SupportedParams {
       if (typeof value === "number") defs[normalizedKey] = { max: value };
     }
   }
-  return { names, defs };
+  return { names, defs, original };
 }
 
 function paramValues(params: SupportedParams, ...keys: string[]): string[] {
@@ -307,7 +319,7 @@ function paramMax(params: SupportedParams, ...keys: string[]): number | null {
   for (const key of keys) {
     const def = params.defs[key.toLowerCase()];
     if (!def) continue;
-    const max = asNumber(def.max ?? def.maximum);
+    const max = asNumber(def.max ?? def.maximum ?? def.max_items ?? def.maxItems);
     if (max !== null) return max;
   }
   return null;
@@ -328,7 +340,7 @@ function extractExtraParams(params: SupportedParams, excludeKeys: Set<string>): 
     if (excludeKeys.has(key)) continue;
     const values = optionValues(def.values ?? def.enum ?? def.options);
     const min = asNumber(def.min ?? def.minimum);
-    const max = asNumber(def.max ?? def.maximum);
+    const max = asNumber(def.max ?? def.maximum ?? def.max_items ?? def.maxItems);
     const step = asNumber(def.step);
     const defaultValue = typeof def.default === "string" || typeof def.default === "number" ? def.default : null;
     const declaredType = asString(def.type).toLowerCase();
@@ -606,6 +618,17 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
           && !mentions(haystack, /image|i2v|unified|multi-?modal|first[- ]?frame/)
         ? false
         : null;
+  // 참조 이미지를 여러 장 받는 동영상 파라미터. 카탈로그가 공개한 최대 장수를 그대로 씁니다.
+  const videoReferenceKey = [
+    "reference_images", "referenceimages", "reference_image_urls", "referenceimageurls",
+    "reference_image_data_urls", "referenceimagedataurls", "image_urls", "imageurls", "imagedataurls", "input_references",
+  ].find((key) => params.names.has(key));
+  const videoReferenceMax = videoReferenceKey
+    ? paramMax(params, videoReferenceKey) ?? asNumber(constraints.max_items ?? constraints.maxItems)
+    : null;
+  const videoReferenceImages = kind === "video" && videoReferenceKey && videoReferenceMax && videoReferenceMax > 1
+    ? { key: params.original[videoReferenceKey] ?? videoReferenceKey, max: videoReferenceMax }
+    : null;
   const videoParam = hasParam(params, "videourl", "video_url", "videodataurl", "source_video");
   const acceptsSourceVideo = videoParam
     ? true
@@ -618,6 +641,8 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   const videoExclude = new Set([
     "imageurl", "image_url", "imagedataurl", "image_data_url", "image", "input_references", "start_image", "init_image",
     "videourl", "video_url", "videodataurl", "source_video",
+    "reference_images", "referenceimages", "reference_image_urls", "referenceimageurls",
+    "reference_image_data_urls", "referenceimagedataurls", "image_urls", "imageurls", "imagedataurls",
   ]);
   const rawVideoParams = kind === "video" ? extractExtraParams(params, videoExclude) : [];
   // 값 목록·범위 없이 이름만 공개된 자유 입력 파라미터(예: negative_prompt, seed).
@@ -683,6 +708,7 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
     imageParams,
 
     acceptsStartImage,
+    videoReferenceImages,
     acceptsSourceVideo,
     videoParams,
     extraImageRoles,

@@ -27,6 +27,12 @@ async function resolveDataUrl(id: string): Promise<string | null> {
   return `data:${found.mime};base64,${buffer.toString("base64")}`;
 }
 
+const REFERENCE_FIELDS = new Set([
+  "reference_images", "referenceimages", "reference_image_urls", "referenceimageurls",
+  "reference_image_data_urls", "referenceimagedataurls", "image_urls", "imageurls", "imagedataurls", "input_references",
+]);
+const MAX_REFERENCE_IMAGES = 16;
+
 export async function POST(request: NextRequest) {
   let body: {
     model?: unknown;
@@ -38,6 +44,10 @@ export async function POST(request: NextRequest) {
     startImageDataUrl?: unknown;
     sourceVideoDataUrl?: unknown;
     endImageDataUrl?: unknown;
+    /** 참조 이미지 여러 장(카탈로그가 공개한 파라미터 이름과 함께). */
+    referenceImageIds?: unknown;
+    referenceImageDataUrls?: unknown;
+    referenceImageKey?: unknown;
     params?: unknown;
   };
   try {
@@ -81,12 +91,31 @@ export async function POST(request: NextRequest) {
       }
     }
   }
+  // 참조 이미지 여러 장. 필드 이름은 카탈로그에서 찾은 값이지만 클라이언트가 보내므로,
+  // 허용 목록에 있는 이름만 받습니다.
+  let referenceField: string | null = null;
+  const referenceKey = typeof body.referenceImageKey === "string" ? body.referenceImageKey : "";
+  if (Array.isArray(body.referenceImageIds) && REFERENCE_FIELDS.has(referenceKey.toLowerCase())) {
+    const ids = (body.referenceImageIds as unknown[]).filter((id): id is string => typeof id === "string").slice(0, MAX_REFERENCE_IMAGES);
+    const inlineList = Array.isArray(body.referenceImageDataUrls) ? (body.referenceImageDataUrls as unknown[]) : [];
+    const urls: string[] = [];
+    for (let index = 0; index < ids.length; index++) {
+      const dataUrl = (await resolveDataUrl(ids[index])) ?? acceptDataUrl(inlineList[index], "image");
+      if (dataUrl) urls.push(dataUrl);
+      else missing.push(`참조 이미지 ${index + 1}`);
+    }
+    if (urls.length > 0) {
+      payload[referenceKey] = urls;
+      referenceField = referenceKey;
+    }
+  }
   if (missing.length > 0) {
     return NextResponse.json({ error: `${missing.join(", ")}: ${MISSING_ATTACHMENT_MESSAGE}`, missing }, { status: 409 });
   }
   // 길이·해상도·품질 등 모델이 supported_parameters로 공개한 나머지 설정.
   const reservedKeys = new Set(["model", "prompt", "imagedataurl", "videodataurl", "imageurl", "videourl"]);
   if (endImageField) reservedKeys.add(endImageField.toLowerCase());
+  if (referenceField) reservedKeys.add(referenceField.toLowerCase());
   const extraParams = sanitizeExtraParams(body.params, reservedKeys);
   if (typeof extraParams.seed === "string" && /^\d+$/.test(extraParams.seed)) extraParams.seed = Number(extraParams.seed);
   Object.assign(payload, extraParams);

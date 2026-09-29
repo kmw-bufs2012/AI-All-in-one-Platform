@@ -32,6 +32,7 @@ export default function VideoPage() {
   const models = useModels("video");
   const [prompt, setPrompt] = useStudioState<string>("video:prompt", "");
   const [startImage, setStartImage] = useStudioState<AttachedFile | null>("video:startImage", null);
+  const [refImages, setRefImages] = useStudioState<AttachedFile[]>("video:refImages", []);
   const [sourceVideo, setSourceVideo] = useStudioState<AttachedFile | null>("video:sourceVideo", null);
   const [endFrameImage, setEndFrameImage] = useStudioState<AttachedFile | null>("video:endFrameImage", null);
   const [paramValues, setParamValues] = useStudioState<ParamValues>("video:params", {});
@@ -152,6 +153,25 @@ export default function VideoPage() {
     }
   }
 
+  // 참조 이미지 여러 장(NanoGPT 카탈로그가 공개한 모델만). 최대 장수는 카탈로그 값입니다.
+  async function pickRefImages(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (files.length === 0) return;
+    setError("");
+    const max = policy.referenceImages.max;
+    if (refImages.length + files.length > max) {
+      setError(`이 모델은 참조 이미지를 최대 ${max}장까지 첨부할 수 있습니다.`);
+      return;
+    }
+    try {
+      const uploaded = await uploadFiles(files);
+      setRefImages((prev) => [...prev, ...uploaded].slice(0, max));
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "이미지 업로드에 실패했습니다.");
+    }
+  }
+
   async function pickEndFrameImage(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -196,6 +216,7 @@ export default function VideoPage() {
   function startNewSession() {
     setPrompt("");
     setStartImage(null);
+    setRefImages([]);
     setSourceVideo(null);
     setEndFrameImage(null);
     setResults([]);
@@ -235,7 +256,9 @@ export default function VideoPage() {
     // 카탈로그 단가로 우선 어림값을 보여 주고, 실제 응답에 청구액이 실리면
     // 그 값으로 바꿉니다(NanoGPT 공식 문서: 응답마다 cost 필드가 실제 청구액).
     setEstimate(unitPrice !== null ? { amount: unitPrice * count, currency, actual: false } : null);
-    const attachments = [startImage, sourceVideo, endFrameImage].filter((item): item is AttachedFile => Boolean(item));
+    const supportsRefImages = policy.referenceImages.allowed;
+    const sentRefImages = supportsRefImages ? refImages.slice(0, policy.referenceImages.max) : [];
+    const attachments = [startImage, sourceVideo, endFrameImage, ...sentRefImages].filter((item): item is AttachedFile => Boolean(item));
     const errors: string[] = [];
 
     // 서버 임시 저장소에서 첨부가 사라져도 되도록 브라우저 7일 보관 사본을 함께 보냅니다
@@ -250,6 +273,8 @@ export default function VideoPage() {
     const startImageDataUrl = await inline(startImage, supportsStartImage);
     const endImageDataUrl = await inline(endFrameImage, supportsEndFrame);
     const sourceVideoDataUrl = await inline(sourceVideo, supportsSourceVideo);
+    const referenceImageDataUrls: Array<string | undefined> = [];
+    for (const image of sentRefImages) referenceImageDataUrls.push(await inline(image, true));
 
     const runJob = async (job: GenerationJob) => {
       let quote = unitPrice !== null ? { amount: unitPrice, currency, actual: false } : null;
@@ -280,6 +305,9 @@ export default function VideoPage() {
             startImageDataUrl,
             endImageDataUrl,
             sourceVideoDataUrl,
+            referenceImageIds: sentRefImages.length ? sentRefImages.map((item) => item.id) : undefined,
+            referenceImageDataUrls: sentRefImages.length ? referenceImageDataUrls : undefined,
+            referenceImageKey: sentRefImages.length ? policy.referenceImages.key : undefined,
             params: {
               ...filterSupportedParamValues(model.videoParams, paramValues),
               ...(negativeSupported && textParams.negative_prompt ? { negative_prompt: textParams.negative_prompt.slice(0, 500) } : {}),
@@ -377,7 +405,7 @@ export default function VideoPage() {
             modelId={models.selected?.id}
             modelName={models.selected?.name}
             prompt={prompt}
-            referenceImages={(startImage ? 1 : 0) + (endFrameImage ? 1 : 0)}
+            referenceImages={(startImage ? 1 : 0) + (endFrameImage ? 1 : 0) + (policy.referenceImages.allowed ? refImages.length : 0)}
             catalogInputPer1M={models.selected?.pricing?.inputPer1M ?? null}
             params={paramValues}
             resolution={null}
@@ -510,8 +538,9 @@ export default function VideoPage() {
             rows={1}
           />
           <AttachStrip
-            files={[startImage, endFrameImage, sourceVideo].filter((item): item is AttachedFile => Boolean(item))}
+            files={[startImage, endFrameImage, sourceVideo, ...refImages].filter((item): item is AttachedFile => Boolean(item))}
             onRemove={(id) => {
+              setRefImages((prev) => prev.filter((item) => item.id !== id));
               if (startImage?.id === id) setStartImage(null);
               if (endFrameImage?.id === id) setEndFrameImage(null);
               if (sourceVideo?.id === id) setSourceVideo(null);
@@ -532,6 +561,16 @@ export default function VideoPage() {
               onPick={pickStartImage}
               title={supportsStartImage ? "시작 이미지 첨부" : "이 모델은 시작 이미지를 지원하지 않습니다"}
             />
+            {policy.referenceImages.allowed ? (
+              <FileChip
+                label={`참조 이미지 ${refImages.length}/${policy.referenceImages.max}`}
+                accept="image/*"
+                multiple
+                disabled={compressingVideo}
+                onPick={pickRefImages}
+                title={`참조 이미지 여러 장 첨부 (NanoGPT 카탈로그 기준 최대 ${policy.referenceImages.max}장)`}
+              />
+            ) : null}
             {supportsEndFrame ? (
               <FileChip
                 label={`끝 프레임 ${endFrameImage ? 1 : 0}/1`}
