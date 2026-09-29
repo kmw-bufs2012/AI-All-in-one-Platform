@@ -298,3 +298,56 @@ export async function checkR2(): Promise<{ enabled: boolean; ok: boolean; detail
     return { enabled: true, ok: false, detail: error instanceof Error ? error.message : String(error), endpointHost, bucket };
   }
 }
+
+/*
+ * JSON 문서 읽기·쓰기(작업 기록·프롬프트 등 목록형 데이터용).
+ * 여러 요청이 동시에 같은 문서를 고치면 나중 쓰기가 앞선 변경을 덮을 수 있어,
+ * R2 조건부 쓰기(If-Match: 읽을 때의 ETag / If-None-Match: * 새 문서)로
+ * 충돌을 감지하고 다시 읽어 재시도합니다.
+ */
+async function readJsonWithEtag<T>(key: string): Promise<{ data: T | null; etag: string | null }> {
+  const config = r2Config();
+  if (!config) {
+    const buffer = await getObjectBuffer(key);
+    return { data: buffer ? (JSON.parse(buffer.toString("utf8")) as T) : null, etag: null };
+  }
+  const response = await config.client.fetch(objectUrl(config, key), { method: "GET" });
+  if (response.status === 404) return { data: null, etag: null };
+  if (!response.ok) throw await r2Error("읽기", response);
+  const text = await response.text();
+  return { data: text ? (JSON.parse(text) as T) : null, etag: response.headers.get("etag") };
+}
+
+async function writeJsonConditional(key: string, data: unknown, etag: string | null): Promise<boolean> {
+  const config = r2Config();
+  const bytes = Buffer.from(JSON.stringify(data));
+  if (!config) {
+    await putObject(key, bytes, "application/json");
+    return true;
+  }
+  const body = new Uint8Array(bytes);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (etag) headers["If-Match"] = etag;
+  else headers["If-None-Match"] = "*";
+  const signed = await config.client.sign(objectUrl(config, key), { method: "PUT", body, headers });
+  const response = await fetch(signed.url, { method: "PUT", headers: signed.headers, body });
+  if (response.status === 412) return false;
+  if (!response.ok) throw await r2Error("저장", response);
+  return true;
+}
+
+/** 문서를 읽어 mutate 로 바꾼 뒤 저장합니다. 동시 수정 충돌이면 최대 6번 다시 시도합니다. */
+export async function updateJsonDoc<T, R>(key: string, fallback: T, mutate: (current: T) => { next: T; result: R }): Promise<R> {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const { data, etag } = await readJsonWithEtag<T>(key);
+    const { next, result } = mutate(data ?? fallback);
+    if (await writeJsonConditional(key, next, etag)) return result;
+    await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1) + Math.random() * 120));
+  }
+  throw new Error("Cloudflare R2 저장이 동시에 몰려 실패했습니다. 잠시 후 다시 시도해 주세요.");
+}
+
+export async function readJsonDoc<T>(key: string, fallback: T): Promise<T> {
+  const { data } = await readJsonWithEtag<T>(key);
+  return data ?? fallback;
+}
