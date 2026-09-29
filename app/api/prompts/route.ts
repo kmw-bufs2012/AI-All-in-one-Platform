@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, insertPrompt, listPrompts } from "@/lib/db";
+import { insertPrompt, listPrompts } from "@/lib/records";
 
 export async function GET() {
-  const db = getDb();
-  const prompts = listPrompts(db).map((row) => ({
+  const prompts = (await listPrompts()).map((row) => ({
     id: row.id,
     name: row.name,
     content: row.content,
@@ -28,6 +27,6 @@ export async function POST(request: NextRequest) {
   if (!content || content.length > 20000) {
     return NextResponse.json({ error: "프롬프트 내용은 1자 이상 20,000자 이내로 입력해 주세요." }, { status: 400 });
   }
-  const row = insertPrompt(getDb(), name, content);
+  const row = await insertPrompt(name, content);
   return NextResponse.json({ ok: true, id: row.id });
 }

@@ -32,13 +32,46 @@ interface R2Config {
 
 let cachedConfig: R2Config | null | undefined;
 
+/*
+ * 대시보드에서 복사한 값이 이름 대신 주소로 들어오는 경우가 많습니다.
+ * - R2_BUCKET 에 "https://<계정>.r2.cloudflarestorage.com/my-bucket" 같은 S3 주소나
+ *   "my-bucket.<계정>.r2.cloudflarestorage.com", "r2://my-bucket" 가 들어오면 버킷 이름만 꺼냅니다.
+ * - R2 버킷 이름은 소문자·숫자·하이픈만 허용되므로 소문자로 맞춥니다.
+ */
+export function normalizeBucket(raw: string | undefined): string | undefined {
+  let value = raw?.trim().replace(/^["']|["']$/g, "");
+  if (!value) return undefined;
+  value = value.replace(/^r2:\/\//i, "");
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      const segment = url.pathname.split("/").filter(Boolean)[0];
+      value = segment ?? url.hostname.split(".")[0];
+    } catch {
+      // 주소 형식이 아니면 그대로 씁니다.
+    }
+  } else if (value.includes(".r2.cloudflarestorage.com")) {
+    value = value.split(".")[0];
+  }
+  return value.replace(/\/+$/, "").toLowerCase();
+}
+
+/** R2_ACCOUNT_ID 에 엔드포인트 주소 전체가 들어온 경우 계정 ID(32자리 16진수)만 꺼냅니다. */
+export function normalizeAccountId(raw: string | undefined): string | undefined {
+  const value = raw?.trim().replace(/^["']|["']$/g, "");
+  if (!value) return undefined;
+  return /[0-9a-f]{32}/i.exec(value)?.[0] ?? value;
+}
+
+const BUCKET_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+
 function r2Config(): R2Config | null {
   if (cachedConfig !== undefined) return cachedConfig;
   // 복사·붙여넣기로 앞뒤 공백·줄바꿈이 섞이면 서명이 틀려 403 이 나므로 잘라 냅니다.
-  const accountId = process.env.R2_ACCOUNT_ID?.trim();
+  const accountId = normalizeAccountId(process.env.R2_ACCOUNT_ID);
   const accessKeyId = process.env.R2_ACCESS_KEY_ID?.trim();
   const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY?.trim();
-  const bucket = process.env.R2_BUCKET?.trim();
+  const bucket = normalizeBucket(process.env.R2_BUCKET);
   if (!accountId || !accessKeyId || !secretAccessKey || !bucket) {
     cachedConfig = null;
     return null;
@@ -61,7 +94,7 @@ const R2_HINTS: Record<string, string> = {
   InvalidAccessKeyId: "R2_ACCESS_KEY_ID 값이 틀렸거나, 토큰이 삭제되었습니다",
   AccessDenied: "API 토큰 권한이 부족합니다. 'Object Read & Write' 권한과 이 버킷이 포함된 토큰인지 확인하세요",
   NoSuchBucket: "R2_BUCKET 이름의 버킷이 없습니다(이름 오타 또는 EU 관할 구역 버킷이면 R2_ENDPOINT 필요)",
-  InvalidBucketName: "R2_BUCKET 이름 형식이 올바르지 않습니다",
+  InvalidBucketName: "R2_BUCKET 값이 버킷 이름이 아닙니다. 주소가 아닌 버킷 이름(소문자·숫자·하이픈)만 넣어 주세요. /api/storage/status 에서 인식된 이름을 확인할 수 있습니다",
   Unauthorized: "인증에 실패했습니다. R2_ACCOUNT_ID·액세스 키가 같은 계정의 값인지 확인하세요",
 };
 
@@ -240,18 +273,81 @@ export async function findAttachment(id: string): Promise<{ key: string; name: s
 }
 
 /** 설정 점검: 버킷 목록을 1개만 조회해 인증·권한·버킷 이름이 맞는지 확인합니다. */
-export async function checkR2(): Promise<{ enabled: boolean; ok: boolean; detail: string; endpointHost: string | null }> {
+export async function checkR2(): Promise<{ enabled: boolean; ok: boolean; detail: string; endpointHost: string | null; bucket: string | null }> {
   const config = r2Config();
-  if (!config) return { enabled: false, ok: false, detail: "R2 환경 변수 4개 중 하나 이상이 비어 있습니다.", endpointHost: null };
+  if (!config) return { enabled: false, ok: false, detail: "R2 환경 변수 4개 중 하나 이상이 비어 있습니다.", endpointHost: null, bucket: null };
   const endpointHost = new URL(config.endpoint).host;
+  const bucket = new URL(config.endpoint).pathname.split("/").filter(Boolean).pop() ?? null;
+  if (bucket && !BUCKET_NAME_PATTERN.test(bucket)) {
+    return {
+      enabled: true,
+      ok: false,
+      detail: `R2_BUCKET 값("${bucket}")이 버킷 이름 형식이 아닙니다. Cloudflare R2 버킷 목록에 보이는 이름(소문자·숫자·하이픈, 3~63자)만 넣어 주세요.`,
+      endpointHost,
+      bucket,
+    };
+  }
   try {
     const response = await config.client.fetch(`${config.endpoint}?list-type=2&max-keys=1`, { method: "GET" });
-    if (!response.ok) return { enabled: true, ok: false, detail: (await r2Error("점검", response)).message, endpointHost };
+    if (!response.ok) return { enabled: true, ok: false, detail: (await r2Error("점검", response)).message, endpointHost, bucket };
     const probeKey = `healthcheck/${Date.now()}.txt`;
     await putObject(probeKey, Buffer.from("ok"), "text/plain");
     await deleteObject(probeKey);
-    return { enabled: true, ok: true, detail: "읽기·쓰기 모두 정상입니다.", endpointHost };
+    return { enabled: true, ok: true, detail: "읽기·쓰기 모두 정상입니다.", endpointHost, bucket };
   } catch (error) {
-    return { enabled: true, ok: false, detail: error instanceof Error ? error.message : String(error), endpointHost };
+    return { enabled: true, ok: false, detail: error instanceof Error ? error.message : String(error), endpointHost, bucket };
   }
+}
+
+/*
+ * JSON 문서 읽기·쓰기(작업 기록·프롬프트 등 목록형 데이터용).
+ * 여러 요청이 동시에 같은 문서를 고치면 나중 쓰기가 앞선 변경을 덮을 수 있어,
+ * R2 조건부 쓰기(If-Match: 읽을 때의 ETag / If-None-Match: * 새 문서)로
+ * 충돌을 감지하고 다시 읽어 재시도합니다.
+ */
+async function readJsonWithEtag<T>(key: string): Promise<{ data: T | null; etag: string | null }> {
+  const config = r2Config();
+  if (!config) {
+    const buffer = await getObjectBuffer(key);
+    return { data: buffer ? (JSON.parse(buffer.toString("utf8")) as T) : null, etag: null };
+  }
+  const response = await config.client.fetch(objectUrl(config, key), { method: "GET" });
+  if (response.status === 404) return { data: null, etag: null };
+  if (!response.ok) throw await r2Error("읽기", response);
+  const text = await response.text();
+  return { data: text ? (JSON.parse(text) as T) : null, etag: response.headers.get("etag") };
+}
+
+async function writeJsonConditional(key: string, data: unknown, etag: string | null): Promise<boolean> {
+  const config = r2Config();
+  const bytes = Buffer.from(JSON.stringify(data));
+  if (!config) {
+    await putObject(key, bytes, "application/json");
+    return true;
+  }
+  const body = new Uint8Array(bytes);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (etag) headers["If-Match"] = etag;
+  else headers["If-None-Match"] = "*";
+  const signed = await config.client.sign(objectUrl(config, key), { method: "PUT", body, headers });
+  const response = await fetch(signed.url, { method: "PUT", headers: signed.headers, body });
+  if (response.status === 412) return false;
+  if (!response.ok) throw await r2Error("저장", response);
+  return true;
+}
+
+/** 문서를 읽어 mutate 로 바꾼 뒤 저장합니다. 동시 수정 충돌이면 최대 6번 다시 시도합니다. */
+export async function updateJsonDoc<T, R>(key: string, fallback: T, mutate: (current: T) => { next: T; result: R }): Promise<R> {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const { data, etag } = await readJsonWithEtag<T>(key);
+    const { next, result } = mutate(data ?? fallback);
+    if (await writeJsonConditional(key, next, etag)) return result;
+    await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1) + Math.random() * 120));
+  }
+  throw new Error("Cloudflare R2 저장이 동시에 몰려 실패했습니다. 잠시 후 다시 시도해 주세요.");
+}
+
+export async function readJsonDoc<T>(key: string, fallback: T): Promise<T> {
+  const { data } = await readJsonWithEtag<T>(key);
+  return data ?? fallback;
 }

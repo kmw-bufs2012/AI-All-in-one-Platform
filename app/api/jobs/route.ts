@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { deleteJob, getDb, insertJob, listJobs } from "@/lib/db";
+import { deleteJob, insertJob, listJobs } from "@/lib/records";
 
 const ALLOWED_MODES = new Set(["chat", "image", "video", "audio"]);
 
@@ -7,8 +7,12 @@ export async function GET(request: NextRequest) {
   const mode = request.nextUrl.searchParams.get("mode") || undefined;
   const date = request.nextUrl.searchParams.get("date") || undefined;
   const model = request.nextUrl.searchParams.get("model") || undefined;
-  const db = getDb();
-  const rows = listJobs(db, { mode, date, model });
+  let rows;
+  try {
+    rows = await listJobs({ mode, date, model });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "작업 기록을 불러오지 못했습니다." }, { status: 502 });
+  }
   const jobs = rows.map((row) => ({
     id: row.id,
     mode: row.mode,
@@ -50,7 +54,7 @@ export async function POST(request: NextRequest) {
   if (!ALLOWED_MODES.has(mode)) {
     return NextResponse.json({ error: "지원하지 않는 작업 모드입니다." }, { status: 400 });
   }
-  const row = insertJob(getDb(), {
+  const row = await insertJob({
     mode,
     model: typeof body.model === "string" ? body.model : null,
     prompt: typeof body.prompt === "string" ? body.prompt.slice(0, 10000) : null,
@@ -71,6 +75,6 @@ export async function DELETE(request: NextRequest) {
   if (!Number.isInteger(id) || id <= 0) {
     return NextResponse.json({ error: "삭제할 작업 ID가 올바르지 않습니다." }, { status: 400 });
   }
-  deleteJob(getDb(), id);
+  await deleteJob(id);
   return NextResponse.json({ ok: true });
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { deleteObject, getObjectBuffer, putObject, usingR2 } from "@/lib/object-store";
+import { deleteObject, getObjectBuffer, putObject, updateJsonDoc, usingR2 } from "@/lib/object-store";
 
 /*
  * 채팅 대화 기록을 Cloudflare R2 에 보관합니다.
@@ -78,8 +78,11 @@ export async function PUT(request: NextRequest) {
   };
   try {
     await putObject(`chats/${id}.json`, Buffer.from(JSON.stringify({ ...summary, messages: body.messages })), "application/json");
-    const index = (await readIndex()).filter((item) => item.id !== id);
-    await writeIndex([summary, ...index]);
+    // 목록 문서는 조건부 쓰기로 갱신해 동시에 저장해도 항목이 빠지지 않게 합니다.
+    await updateJsonDoc<ChatSummary[], void>(INDEX_KEY, [], (items) => ({
+      next: [summary, ...items.filter((item) => item.id !== id)].slice(0, MAX_ITEMS),
+      result: undefined,
+    }));
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[chats] save failed:", error);
@@ -100,7 +103,7 @@ export async function DELETE(request: NextRequest) {
     }
     if (!id || !ID_PATTERN.test(id)) return NextResponse.json({ error: "대화 ID가 올바르지 않습니다." }, { status: 400 });
     await deleteObject(`chats/${id}.json`);
-    await writeIndex(index.filter((item) => item.id !== id));
+    await updateJsonDoc<ChatSummary[], void>(INDEX_KEY, [], (items) => ({ next: items.filter((item) => item.id !== id), result: undefined }));
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[chats] delete failed:", error);
