@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("[attachments/chunk] write failed:", error);
     return NextResponse.json({
-      error: "파일 저장에 실패했습니다. Cloudflare R2 설정 또는 서버 저장 공간을 확인해 주세요.",
+      error: error instanceof Error && error.message.includes("R2") ? error.message : "파일 저장에 실패했습니다. Cloudflare R2 설정 또는 서버 저장 공간을 확인해 주세요.",
     }, { status: 500 });
   }
 
