@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "aws4fetch": "^1.0.20",
     "bcryptjs": "^3.0.2",
     "next": "^15.0.0",
     "react": "^19.0.0",

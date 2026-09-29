@@ -1,11 +1,11 @@
 import { acceptDataUrl, MISSING_ATTACHMENT_MESSAGE } from "@/lib/inline-media";
 import { NextRequest, NextResponse } from "next/server";
-import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { generateImage, politeNanoGptError, readJson, sanitizeExtraParams } from "@/lib/nanogpt";
 import { extractImages, extractCost } from "@/lib/extract";
 import { dataUrlToBuffer, saveGeneratedFile } from "@/lib/storage";
-import { resolveUploadPath, mimeFromPath, MAX_REFERENCE_BYTES } from "@/lib/attachments";
+import { mimeFromPath, MAX_REFERENCE_BYTES } from "@/lib/attachments";
+import { findAttachment, getObjectBuffer } from "@/lib/object-store";
 
 // Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
 export const maxDuration = 300;
@@ -57,16 +57,10 @@ export async function POST(request: NextRequest) {
   const inputReferences: string[] = [];
   const missing: string[] = [];
   for (const id of referenceIds) {
-    let dir: string | null = null;
-    try {
-      dir = resolveUploadPath(path.join("attachments", id));
-    } catch {
-      dir = null;
-    }
-    const entries = dir ? await readdir(dir, { withFileTypes: true }).catch(() => []) : [];
-    const entry = entries.find((item) => item.isFile());
-    if (dir && entry) {
-      const buffer = await readFile(path.join(dir, entry.name));
+    const found = await findAttachment(id).catch(() => null);
+    const buffer = found ? await getObjectBuffer(found.key).catch(() => null) : null;
+    const entry = found ? { name: found.name } : null;
+    if (buffer && entry) {
       if (buffer.byteLength > MAX_REFERENCE_BYTES) {
         return NextResponse.json({
           error: `${entry.name} 참조 이미지가 허용 크기를 초과합니다.`,

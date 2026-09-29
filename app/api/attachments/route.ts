@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { writeFile, mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import {
-  ensureUploadDirs,
-  uploadRoot,
   sanitizeFileName,
   kindFromFile,
   MAX_IMAGES,
@@ -15,6 +11,7 @@ import {
   MAX_DOCS,
   MAX_DOC_BYTES,
 } from "@/lib/attachments";
+import { ensureStorageReady, putObject } from "@/lib/object-store";
 
 // Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
 export const maxDuration = 300;
@@ -60,10 +57,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `문서는 최대 ${MAX_DOCS}개까지 첨부할 수 있습니다.` }, { status: 400 });
   }
 
-  let root: string;
   try {
-    ensureUploadDirs();
-    root = uploadRoot();
+    ensureStorageReady();
   } catch (error) {
     console.error("[attachments] upload root unavailable:", error);
     return NextResponse.json({
@@ -88,11 +83,9 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
     const id = randomUUID();
-    const dir = path.join(root, "attachments", id);
     try {
-      await mkdir(dir, { recursive: true });
       const buffer = Buffer.from(await file.arrayBuffer());
-      await writeFile(path.join(dir, sanitizeFileName(file.name)), buffer);
+      await putObject(`attachments/${id}/${sanitizeFileName(file.name)}`, buffer, file.type || "application/octet-stream");
     } catch (error) {
       console.error("[attachments] save failed:", error);
       return NextResponse.json({
