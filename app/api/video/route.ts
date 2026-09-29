@@ -32,6 +32,13 @@ const REFERENCE_FIELDS = new Set([
   "reference_image_data_urls", "referenceimagedataurls", "image_urls", "imageurls", "imagedataurls", "input_references",
 ]);
 const MAX_REFERENCE_IMAGES = 16;
+const REFERENCE_VIDEO_FIELDS = new Set(["reference_videos", "referencevideos", "reference_video_urls", "video_urls"]);
+const MAX_REFERENCE_VIDEOS = 5;
+
+/** NanoGPT 문서의 공통 필드(referenceImages·referenceVideos)는 실제 배열, 카탈로그 필드는 JSON 배열 텍스트로 보냅니다. */
+function referenceValue(key: string, urls: string[]): string | string[] {
+  return key === "referenceImages" || key === "referenceVideos" ? urls : JSON.stringify(urls);
+}
 
 /*
  * "이미지 URL"을 받는 파라미터(last_image·reference_images)용 주소.
@@ -65,6 +72,8 @@ export async function POST(request: NextRequest) {
     referenceImageIds?: unknown;
     referenceImageDataUrls?: unknown;
     referenceImageKey?: unknown;
+    referenceVideoIds?: unknown;
+    referenceVideoKey?: unknown;
     params?: unknown;
   };
   try {
@@ -129,8 +138,25 @@ export async function POST(request: NextRequest) {
     }
     if (urls.length > 0) {
       // NanoGPT 카탈로그는 이 값을 "JSON array of image URLs" 텍스트로 받습니다.
-      payload[referenceKey] = JSON.stringify(urls);
+      payload[referenceKey] = referenceValue(referenceKey, urls);
       referenceField = referenceKey;
+    }
+  }
+  // 참조 동영상 여러 개. 동영상은 요청 본문 한도(4.5MB) 때문에 R2 서명 URL로만 보냅니다.
+  let referenceVideoField: string | null = null;
+  const referenceVideoKey = typeof body.referenceVideoKey === "string" ? body.referenceVideoKey : "";
+  if (Array.isArray(body.referenceVideoIds) && REFERENCE_VIDEO_FIELDS.has(referenceVideoKey.toLowerCase())) {
+    const ids = (body.referenceVideoIds as unknown[]).filter((id): id is string => typeof id === "string").slice(0, MAX_REFERENCE_VIDEOS);
+    const urls: string[] = [];
+    for (let index = 0; index < ids.length; index++) {
+      const found = await findAttachment(ids[index]).catch(() => null);
+      const url = found ? await presignedGetUrl(found.key).catch(() => null) : null;
+      if (url) urls.push(url);
+      else missing.push(`참조 동영상 ${index + 1}`);
+    }
+    if (urls.length > 0) {
+      payload[referenceVideoKey] = referenceValue(referenceVideoKey, urls);
+      referenceVideoField = referenceVideoKey;
     }
   }
   if (missing.length > 0) {
@@ -140,6 +166,7 @@ export async function POST(request: NextRequest) {
   const reservedKeys = new Set(["model", "prompt", "imagedataurl", "videodataurl", "imageurl", "videourl"]);
   if (endImageField) reservedKeys.add(endImageField.toLowerCase());
   if (referenceField) reservedKeys.add(referenceField.toLowerCase());
+  if (referenceVideoField) reservedKeys.add(referenceVideoField.toLowerCase());
   const extraParams = sanitizeExtraParams(body.params, reservedKeys);
   if (typeof extraParams.seed === "string" && /^\d+$/.test(extraParams.seed)) extraParams.seed = Number(extraParams.seed);
   Object.assign(payload, extraParams);

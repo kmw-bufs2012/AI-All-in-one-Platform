@@ -183,6 +183,8 @@ export interface VideoAttachmentPolicy {
   sourceVideo: AttachmentSlot;
   /** 참조 이미지 여러 장(카탈로그가 공개한 파라미터·최대 장수). key 는 요청 필드 이름입니다. */
   referenceImages: AttachmentSlot & { key: string | null };
+  /** 참조 동영상 여러 개(reference_videos 등). */
+  referenceVideos: AttachmentSlot & { key: string | null };
   /** 모델이 공식적으로 받는 입력 한도 안내(앱은 시작 이미지 1장만 전송). */
   note: string | null;
 }
@@ -199,6 +201,7 @@ export function resolveVideoAttachmentPolicy(model: NormalizedModel | null): Vid
       startImage: { allowed: false, max: 0 },
       sourceVideo: { allowed: false, max: 0 },
       referenceImages: { allowed: false, max: 0, key: null },
+      referenceVideos: { allowed: false, max: 0, key: null },
       note: null,
     };
   }
@@ -208,15 +211,24 @@ export function resolveVideoAttachmentPolicy(model: NormalizedModel | null): Vid
   // NanoGPT 동영상 API는 시작 이미지를 imageUrl/imageDataUrl 한 개로 받습니다.
   // 참조 이미지 여러 장은 NanoGPT 카탈로그가 그 파라미터와 최대 장수를 공개한 모델에서만 받습니다.
   const refs = model.videoReferenceImages;
+  const refVideos = model.videoReferenceVideos;
+  const officialText = official
+    ? `${official.family} 공식 한도: 이미지 ${official.referenceImages}장 · 동영상 ${official.videos}개${official.audios ? ` · 오디오 ${official.audios}개` : ""}${official.note ? ` (${official.note})` : ""}`
+    : null;
+  const sentText = [
+    refs ? `참조 이미지 최대 ${refs.max}장(${refs.key})` : null,
+    refVideos ? `참조 동영상 최대 ${refVideos.max}개(${refVideos.key})` : null,
+  ].filter(Boolean).join(" · ");
   return {
     startImage: { allowed: startAllowed, max: startAllowed ? 1 : 0 },
     sourceVideo: { allowed: sourceAllowed, max: sourceAllowed ? 1 : 0 },
     referenceImages: refs ? { allowed: true, max: refs.max, key: refs.key } : { allowed: false, max: 0, key: null },
-    note: refs
-      ? `NanoGPT 카탈로그 기준: 참조 이미지 최대 ${refs.max}장(${refs.key})${official ? ` · ${official.family} 공식 한도 참조 이미지 ${official.referenceImages}장` : ""}`
-      : official
-        ? `${official.family} 공식 입력 한도: 참조 이미지 ${official.referenceImages}장${official.videos ? ` · 참조 동영상 ${official.videos}개` : ""} (NanoGPT 카탈로그가 여러 장 입력 파라미터를 공개하지 않아 시작 이미지 1장${sourceAllowed ? "·원본 동영상 1개" : ""}만 전송)`
-        : null,
+    referenceVideos: refVideos ? { allowed: true, max: refVideos.max, key: refVideos.key } : { allowed: false, max: 0, key: null },
+    note: [
+      sentText ? `이 앱이 보내는 입력: ${sentText}` : officialText ? "NanoGPT가 여러 장 입력 파라미터를 공개하지 않아 시작 이미지 1장(과 원본 동영상 1개)만 보냅니다" : null,
+      officialText,
+      official ? "요청 1건 = 동영상 1개 · \"동시 생성\"으로 최대 4건 병렬" : null,
+    ].filter(Boolean).join(" · ") || null,
   };
 }
 

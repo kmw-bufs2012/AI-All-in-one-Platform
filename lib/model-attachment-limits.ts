@@ -175,19 +175,52 @@ export function findImageReferenceLimit(id: string, name: string): ReferenceLimi
 
 export interface VideoInputLimit {
   family: string;
-  /** 모델이 공식적으로 받는 참조 이미지 최대 수(참고용). */
+  /** 모델이 공식적으로 받는 참조 이미지 최대 수. */
   referenceImages: number;
-  /** 원본(참조) 동영상 최대 수. */
+  /** 참조(또는 원본) 동영상 최대 수. */
   videos: number;
+  /** 참조 오디오 최대 수(0 = 미지원·미확인). */
+  audios?: number;
+  /**
+   * NanoGPT 카탈로그가 참조 파라미터를 싣지 않았지만 NanoGPT 문서가 공통 필드
+   * (referenceImages·referenceVideos 배열)로 받는다고 밝힌 모델에서 쓰는 필드 이름.
+   */
+  apiReferenceImagesKey?: string;
+  apiReferenceVideosKey?: string;
+  /** 추가 조건(총 길이·동시 사용 제한 등). */
+  note?: string;
   source: string;
 }
 
-/* 동영상 생성 — 공식 입력 한도(참고 표시용). 앱은 시작 이미지 1장만 전송합니다. */
+/*
+ * 동영상 생성 — 계열별 공식 입력 한도(2026-09-29 조사).
+ *
+ * 우선순위: NanoGPT 카탈로그(설명의 "Up to N")가 있으면 그 값을 쓰고, 없을 때 이 표를 씁니다.
+ * 위에서부터 먼저 맞는 항목을 쓰므로 세부 모델을 계열 전체보다 앞에 둡니다.
+ *
+ * 동시 생성: NanoGPT 동영상 API는 요청 1건에 동영상 1개를 만듭니다. 이 네 계열 모두
+ * 출력 개수 파라미터가 없습니다(nano-gpt.com/api/v1/video-models). 여러 개가 필요하면
+ * 앱이 같은 요청을 나란히 보냅니다(동영상 화면의 "동시 생성", 최대 4건).
+ */
 const VIDEO_INPUT_LIMITS: Array<{ pattern: RegExp; limit: VideoInputLimit }> = [
   { pattern: /veo-?3/i, limit: { family: "Google Veo 3.1", referenceImages: 3, videos: 0, source: "ai.google.dev/gemini-api/docs/veo" } },
-  { pattern: /wan-?2[.-]7.*reference/i, limit: { family: "Wan 2.7 Reference", referenceImages: 5, videos: 3, source: "alibabacloud.com/help/en/model-studio" } },
-  { pattern: /seedance-?2/i, limit: { family: "Seedance 2.x", referenceImages: 9, videos: 3, source: "seed.bytedance.com/en/seedance2_0" } },
-  { pattern: /kling.*(omni|o3|3)/i, limit: { family: "Kling 3.0 Omni", referenceImages: 7, videos: 1, source: "kling.ai/document-api/api/video/3-0-omni/video-omni" } },
+  // ── MiniMax ──
+  { pattern: /minimax.*h3|hailuo.*h3/i, limit: { family: "MiniMax H3", referenceImages: 9, videos: 3, note: "참조 오디오도 받음(개수 미공개)", source: "nano-gpt.com/api/v1/video-models (minimax-h3/reference-to-video: Up to 9 reference images, Up to 3 reference videos)" } },
+  { pattern: /minimax|hailuo/i, limit: { family: "MiniMax Hailuo 02/2.3", referenceImages: 1, videos: 0, note: "시작 이미지 1장(일부 모델은 끝 프레임 1장 추가)", source: "platform.minimax.io/docs (image-to-video: first_frame_image / last_frame_image)" } },
+  // ── Seedance ──
+  { pattern: /seedance-?2.*video-?edit/i, limit: { family: "Seedance 2.0 Video Edit", referenceImages: 9, videos: 1, note: "편집할 원본 동영상 1개 + 참조 이미지·오디오", source: "docs.byteplus.com (Seedance 2.0: 이미지 최대 9, 동영상 최대 3, 오디오 최대 3), nano-gpt.com 카탈로그" } },
+  { pattern: /seedance-?2/i, limit: { family: "Seedance 2.0", referenceImages: 9, videos: 3, audios: 3, note: "참조 동영상 총 15초 이하, 전체 입력 최대 12개", source: "docs.byteplus.com / seed.bytedance.com/en/seedance2_0 (2026), nano-gpt.com 카탈로그(max 15s total)" } },
+  { pattern: /seedance/i, limit: { family: "Seedance 1.x", referenceImages: 1, videos: 0, note: "시작 이미지 1장(+ 끝 프레임 1장, 모델별)", source: "docs.byteplus.com (Seedance 1.0/1.5 image-to-video)" } },
+  // ── Wan ──
+  { pattern: /wan.*3[.-]?0.*reference|wan-?3.*r2v/i, limit: { family: "Wan 3.0 Reference", referenceImages: 10, videos: 5, audios: 5, note: "참조 동영상·오디오 각각 총 15초 이하", source: "alibabacloud.com/help/en/model-studio (Wan 3.0 reference-to-video, 2026)" } },
+  { pattern: /wan-?2[.-]?7.*(reference|r2v)|wan-?2[.-]?7-?video/i, limit: { family: "Wan 2.7 Reference", referenceImages: 5, videos: 3, source: "alibabacloud.com/help/en/model-studio (wan2.7-r2v)" } },
+  { pattern: /wan-wavespeed-26/i, limit: { family: "Wan 2.6 Reference (WaveSpeed)", referenceImages: 3, videos: 3, apiReferenceImagesKey: "referenceImages", note: "NanoGPT 문서가 referenceImages 로 받는다고 명시. 참조 이미지 장수는 공식 미공개라 참조 동영상 한도(1~3)와 같게 제한", source: "docs.nano-gpt.com/api-reference/video-generation (Reference-to-Video), fal.ai/models/wan/v2.6/reference-to-video" } },
+  { pattern: /wan-?2[.-]?6.*(reference|r2v)/i, limit: { family: "Wan 2.6 Reference", referenceImages: 0, videos: 3, note: "참조 동영상 1~3개. NanoGPT 카탈로그가 참조 입력 파라미터를 공개하지 않음", source: "fal.ai/models/wan/v2.6/reference-to-video, aimlapi.com 문서" } },
+  // ── Kling ──
+  { pattern: /kling-video-o1/i, limit: { family: "Kling O1", referenceImages: 7, videos: 1, apiReferenceImagesKey: "referenceImages", note: "동영상을 함께 넣으면 이미지는 최대 4장", source: "kling.ai (Kling O1 사용 가이드, 2025), docs.nano-gpt.com (Reference-to-Video)" } },
+  { pattern: /kling.*(omni|o3)/i, limit: { family: "Kling 3.0 Omni", referenceImages: 7, videos: 1, note: "동영상을 함께 넣으면 이미지는 최대 4장", source: "kling.ai/document-api/api/video/3-0-omni/video-omni" } },
+  { pattern: /kling-?v?3/i, limit: { family: "Kling 3.0", referenceImages: 1, videos: 0, note: "시작·끝 프레임 각 1장. 요소(element_list)는 최대 3개, 요소당 이미지 2~4장", source: "kling.ai 3.0 API 문서, kie.ai·magichour.ai 정리(2026)" } },
+  { pattern: /kling/i, limit: { family: "Kling 1.x/2.x", referenceImages: 1, videos: 0, note: "시작 이미지 1장(+ 끝 프레임 image_tail 1장, 모델별)", source: "kling.ai 개발자 문서(image2video)" } },
   { pattern: /grok-?imagine-?video/i, limit: { family: "xAI Grok Imagine Video", referenceImages: 7, videos: 1, source: "docs.x.ai/developers/model-capabilities/video/reference-to-video" } },
   { pattern: /sora-?2/i, limit: { family: "OpenAI Sora 2", referenceImages: 1, videos: 0, source: "OpenAI Videos API input_reference" } },
 ];
