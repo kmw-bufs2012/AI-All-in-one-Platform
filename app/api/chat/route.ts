@@ -1,16 +1,13 @@
 import { acceptDataUrl, MISSING_ATTACHMENT_MESSAGE } from "@/lib/inline-media";
 import { NextRequest, NextResponse } from "next/server";
-import { readFile, readdir } from "node:fs/promises";
-import path from "node:path";
 import { proxyChatCompletion, politeNanoGptError, readJson } from "@/lib/nanogpt";
 import {
-  resolveUploadPath,
-  mimeFromPath,
   MAX_IMAGES,
   MAX_VIDEO_FILES,
   MAX_AUDIO_FILES,
   MAX_DOCS,
 } from "@/lib/attachments";
+import { findAttachment, getObjectBuffer } from "@/lib/object-store";
 
 // Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
 export const maxDuration = 300;
@@ -26,25 +23,19 @@ interface OutgoingPart {
   [key: string]: unknown;
 }
 
-async function resolveAttachmentFile(id: string): Promise<{ filePath: string; mime: string; name: string } | null> {
+async function resolveAttachmentFile(id: string): Promise<{ key: string; mime: string; name: string } | null> {
   if (!UUID_PATTERN.test(id)) return null;
-  let dir: string | null = null;
-  try {
-    dir = resolveUploadPath(path.join("attachments", id));
-  } catch {
-    return null;
-  }
-  if (!dir) return null;
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-  const fileEntry = entries.find((entry) => entry.isFile());
-  if (!fileEntry) return null;
-  const filePath = path.join(dir, fileEntry.name);
-  return { filePath, mime: mimeFromPath(filePath), name: fileEntry.name };
+  return findAttachment(id).catch(() => null);
 }
 
-async function toDataUrl(filePath: string, mime: string): Promise<string> {
-  const buffer = await readFile(filePath);
-  return `data:${mime};base64,${buffer.toString("base64")}`;
+async function readAttachment(key: string): Promise<Buffer> {
+  const buffer = await getObjectBuffer(key);
+  if (!buffer) throw new Error("첨부 파일을 읽지 못했습니다.");
+  return buffer;
+}
+
+async function toDataUrl(key: string, mime: string): Promise<string> {
+  return `data:${mime};base64,${(await readAttachment(key)).toString("base64")}`;
 }
 
 /** OpenAI 호환 input_audio 파트의 format 값. */
@@ -159,7 +150,7 @@ export async function POST(request: NextRequest) {
       if (inline) parts.push({ type: "image_url", image_url: { url: inline } });
       continue;
     }
-    parts.push({ type: "image_url", image_url: { url: await toDataUrl(file.filePath, file.mime) } });
+    parts.push({ type: "image_url", image_url: { url: await toDataUrl(file.key, file.mime) } });
   }
   for (const id of videoIds) {
     const file = await resolveAttachmentFile(id);
@@ -168,7 +159,7 @@ export async function POST(request: NextRequest) {
       if (inline) parts.push({ type: "video_url", video_url: { url: inline } });
       continue;
     }
-    parts.push({ type: "video_url", video_url: { url: await toDataUrl(file.filePath, file.mime) } });
+    parts.push({ type: "video_url", video_url: { url: await toDataUrl(file.key, file.mime) } });
   }
   for (const id of audioIds) {
     const file = await resolveAttachmentFile(id);
@@ -178,7 +169,7 @@ export async function POST(request: NextRequest) {
       if (match) parts.push({ type: "input_audio", input_audio: { data: match[2], format: audioFormat(`audio/${match[1]}`) } });
       continue;
     }
-    const buffer = await readFile(file.filePath);
+    const buffer = await readAttachment(file.key);
     parts.push({
       type: "input_audio",
       input_audio: { data: buffer.toString("base64"), format: audioFormat(file.mime) },
@@ -215,11 +206,11 @@ export async function POST(request: NextRequest) {
       if (!pdfAllowed) continue;
       parts.push({
         type: "file",
-        file: { file_data: await toDataUrl(file.filePath, file.mime), filename: file.name },
+        file: { file_data: await toDataUrl(file.key, file.mime), filename: file.name },
       });
       continue;
     }
-    const text = (await readFile(file.filePath, "utf8")).slice(0, MAX_INLINE_DOC_CHARS);
+    const text = (await readAttachment(file.key)).toString("utf8").slice(0, MAX_INLINE_DOC_CHARS);
     parts.push({ type: "text", text: `첨부 문서 «${file.name}»\n\n${text}` });
   }
   if (parts.length === 0) {

@@ -1,10 +1,9 @@
 import { acceptDataUrl, MISSING_ATTACHMENT_MESSAGE } from "@/lib/inline-media";
 import { NextRequest, NextResponse } from "next/server";
-import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { queueVideo, politeNanoGptError, readJson, sanitizeExtraParams } from "@/lib/nanogpt";
 import { extractRunId, extractStatus, extractCost } from "@/lib/extract";
-import { resolveUploadPath, mimeFromPath } from "@/lib/attachments";
+import { findAttachment, getObjectBuffer } from "@/lib/object-store";
 import { findVideoOverlay } from "@/lib/model-capability-overlay";
 
 // Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
@@ -21,18 +20,11 @@ export const maxDuration = 300;
  * 판정해 클라이언트에서 걸러 보냅니다(lib/attachment-policy.ts).
  */
 async function resolveDataUrl(id: string): Promise<string | null> {
-  let dir: string | null = null;
-  try {
-    dir = resolveUploadPath(path.join("attachments", id));
-  } catch {
-    return null;
-  }
-  if (!dir) return null;
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-  const entry = entries.find((item) => item.isFile());
-  if (!entry) return null;
-  const buffer = await readFile(path.join(dir, entry.name));
-  return `data:${mimeFromPath(entry.name)};base64,${buffer.toString("base64")}`;
+  const found = await findAttachment(id).catch(() => null);
+  if (!found) return null;
+  const buffer = await getObjectBuffer(found.key).catch(() => null);
+  if (!buffer) return null;
+  return `data:${found.mime};base64,${buffer.toString("base64")}`;
 }
 
 export async function POST(request: NextRequest) {

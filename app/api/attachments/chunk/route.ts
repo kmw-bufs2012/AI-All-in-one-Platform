@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { appendFile, mkdir, stat, rm } from "node:fs/promises";
-import path from "node:path";
 import {
-  ensureUploadDirs,
-  uploadRoot,
   sanitizeFileName,
   kindFromFile,
   MAX_IMAGE_BYTES,
   MAX_VIDEO_BYTES,
   MAX_DOC_BYTES,
 } from "@/lib/attachments";
+import { deletePrefix, ensureStorageReady, getObjectBuffer, listKeys, putObject } from "@/lib/object-store";
 
 // Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
 export const maxDuration = 300;
@@ -74,47 +71,65 @@ export async function POST(request: NextRequest) {
     }, { status: 400 });
   }
 
-  let root: string;
   try {
-    ensureUploadDirs();
-    root = uploadRoot();
+    ensureStorageReady();
   } catch (error) {
-    console.error("[attachments/chunk] upload root unavailable:", error);
+    console.error("[attachments/chunk] storage unavailable:", error);
     return NextResponse.json({
-      error: "파일을 저장할 공간을 준비하지 못했습니다. 서버에 쓰기 가능한 저장소(UPLOAD_DIR 등)가 있는지 확인해 주세요.",
+      error: "파일을 저장할 공간을 준비하지 못했습니다. Cloudflare R2 설정 또는 서버 저장소(UPLOAD_DIR)를 확인해 주세요.",
     }, { status: 500 });
   }
 
+  /*
+   * 조각을 uploads-tmp/<uploadId>/<순번> 으로 따로 저장하고, 마지막 조각이 오면
+   * 순서대로 이어 붙여 attachments/<uploadId>/<파일명> 한 개로 만듭니다.
+   * 조각이 서로 다른 서버 인스턴스에 도착해도 R2 에서는 모두 모입니다.
+   */
   const safeName = sanitizeFileName(name);
-  const dir = path.join(root, "attachments", uploadId);
-  const filePath = path.join(dir, safeName);
-
+  const tmpPrefix = `uploads-tmp/${uploadId}/`;
+  const sizeLimit = sizeLimitFor(kind);
   try {
-    if (index === 0) {
-      // 이전에 실패해 남은 조각이 있을 수 있으니 같은 uploadId 디렉터리를 새로 만듭니다.
-      await rm(dir, { recursive: true, force: true });
-      await mkdir(dir, { recursive: true });
-    }
     const buffer = Buffer.from(await chunk.arrayBuffer());
-    await appendFile(filePath, buffer);
+    await putObject(`${tmpPrefix}${String(index).padStart(5, "0")}`, buffer, "application/octet-stream");
   } catch (error) {
     console.error("[attachments/chunk] write failed:", error);
     return NextResponse.json({
-      error: "파일 저장에 실패했습니다. 서버에 쓰기 가능한 저장 공간이 있는지 확인해 주세요.",
+      error: "파일 저장에 실패했습니다. Cloudflare R2 설정 또는 서버 저장 공간을 확인해 주세요.",
     }, { status: 500 });
   }
 
-  const sizeLimit = sizeLimitFor(kind);
-  const written = await stat(filePath).then((info) => info.size).catch(() => 0);
-  if (written > sizeLimit) {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-    return NextResponse.json({
-      error: `${name} 파일의 크기가 ${limitText(kind)}를 초과합니다.`,
-    }, { status: 400 });
+  if (index < total - 1) {
+    if ((index + 1) * CHUNK_SIZE > sizeLimit + CHUNK_SIZE) {
+      await deletePrefix(tmpPrefix);
+      return NextResponse.json({ error: `${name} 파일의 크기가 ${limitText(kind)}를 초과합니다.` }, { status: 400 });
+    }
+    return NextResponse.json({ ok: true, received: index + 1, total });
   }
 
-  if (index < total - 1) {
-    return NextResponse.json({ ok: true, received: index + 1, total });
+  let written = 0;
+  try {
+    const keys = (await listKeys(tmpPrefix)).sort();
+    if (keys.length !== total) {
+      await deletePrefix(tmpPrefix);
+      return NextResponse.json({ error: "업로드 조각 일부가 누락되었습니다. 다시 업로드해 주세요." }, { status: 400 });
+    }
+    const parts: Buffer[] = [];
+    for (const key of keys) {
+      const part = await getObjectBuffer(key);
+      if (!part) throw new Error(`조각을 읽지 못했습니다: ${key}`);
+      parts.push(part);
+    }
+    const combined = Buffer.concat(parts);
+    written = combined.length;
+    if (written > sizeLimit) {
+      await deletePrefix(tmpPrefix);
+      return NextResponse.json({ error: `${name} 파일의 크기가 ${limitText(kind)}를 초과합니다.` }, { status: 400 });
+    }
+    await putObject(`attachments/${uploadId}/${safeName}`, combined, mime || "application/octet-stream");
+    await deletePrefix(tmpPrefix);
+  } catch (error) {
+    console.error("[attachments/chunk] combine failed:", error);
+    return NextResponse.json({ error: "업로드한 조각을 합치지 못했습니다. 다시 시도해 주세요." }, { status: 500 });
   }
 
   return NextResponse.json({

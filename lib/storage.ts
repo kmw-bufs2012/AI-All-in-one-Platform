@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { uploadRoot, ensureUploadDirs, extFromMime } from "@/lib/attachments";
+import { extFromMime } from "@/lib/attachments";
+import { putObject } from "@/lib/object-store";
 
+/** 생성 결과를 저장합니다(Cloudflare R2 설정 시 R2, 아니면 로컬). 반환값은 /api/files/ 뒤에 붙는 키입니다. */
 export async function saveGeneratedFile(buffer: Buffer, mime: string): Promise<string> {
-  ensureUploadDirs();
   const name = `${randomUUID()}.${extFromMime(mime)}`;
-  await writeFile(path.join(uploadRoot(), "generated", name), buffer);
-  return `generated/${name}`;
+  const key = `generated/${name}`;
+  await putObject(key, buffer, mime);
+  return key;
 }
 
 export function dataUrlToBuffer(dataUrl: string): { buffer: Buffer; mime: string } | null {

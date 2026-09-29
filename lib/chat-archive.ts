@@ -71,3 +71,55 @@ export function clearConversations(): void {
 export function newConversationId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+/*
+ * Cloudflare R2 동기화(/api/chats). 서버에 R2 가 설정돼 있으면 대화를 R2 에도
+ * 저장해 기기·브라우저와 관계없이 다시 볼 수 있습니다(기간 제한 없음, 직접 지울 때까지).
+ * R2 가 없으면 enabled: false 가 와서 localStorage 7일 보관만 씁니다.
+ */
+export interface CloudSummary {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messageCount: number;
+}
+
+export async function fetchCloudList(): Promise<{ enabled: boolean; items: CloudSummary[] }> {
+  try {
+    const response = await fetch("/api/chats", { cache: "no-store" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || !body.enabled) return { enabled: false, items: [] };
+    return { enabled: true, items: Array.isArray(body.conversations) ? body.conversations : [] };
+  } catch {
+    return { enabled: false, items: [] };
+  }
+}
+
+export async function fetchCloudConversation<M>(id: string): Promise<ArchivedConversation<M> | null> {
+  try {
+    const response = await fetch(`/api/chats?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+    if (!response.ok) return null;
+    const body = await response.json();
+    return Array.isArray(body.messages) ? (body as ArchivedConversation<M>) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCloudConversation<M>(conversation: ArchivedConversation<M>): Promise<boolean> {
+  try {
+    const response = await fetch("/api/chats", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(conversation),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteCloudConversation(id: string | "all"): Promise<void> {
+  const query = id === "all" ? "all=1" : `id=${encodeURIComponent(id)}`;
+  await fetch(`/api/chats?${query}`, { method: "DELETE" }).catch(() => undefined);
+}

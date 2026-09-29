@@ -169,6 +169,11 @@ export function mimeFromPath(filePath: string): string {
 
 export function extFromMime(mime: string): string {
   switch (mime.toLowerCase()) {
+    case "image/png": return "png";
+    case "image/jpeg": return "jpg";
+    case "image/webp": return "webp";
+    case "image/gif": return "gif";
+    case "image/avif": return "avif";
     case "video/mp4": return "mp4";
     case "video/webm": return "webm";
     case "video/quicktime": return "mov";

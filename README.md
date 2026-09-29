@@ -62,6 +62,14 @@
 | `SESSION_SECRET` | 아니요 | 세션 쿠키 서명 키. 설정하지 않으면 `APP_PASSWORD`로 대체됩니다. |
 | `DATABASE_PATH` | 아니요 | SQLite 파일 경로. 기본값은 `./data/app.db`입니다. |
 
+### Cloudflare R2 보관 (선택)
+
+`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` 네 값을 모두 설정하면 첨부 파일, 생성한 이미지·동영상·음성, 채팅 대화 기록을 Cloudflare R2에 저장합니다(`lib/object-store.ts`, `app/api/chats`). 서버 인스턴스가 바뀌거나 재배포돼도 파일과 대화가 사라지지 않고, 다른 기기에서도 지난 대화를 열 수 있습니다. 설정하지 않으면 기존처럼 서버 로컬 저장소와 브라우저 7일 보관을 씁니다.
+
+1. Cloudflare 대시보드 → R2 → 버킷 만들기(공개 접근은 켜지 않아도 됩니다. 파일은 앱의 `/api/files`가 로그인 확인 후 내려줍니다).
+2. R2 → "API 토큰 관리" → Object Read & Write 권한으로 토큰을 만들고 Access Key ID·Secret Access Key를 복사합니다.
+3. 배포 환경(Vercel 등)의 환경 변수에 네 값을 넣고 다시 배포합니다.
+
 ## 실행 방법
 
 ```bash
