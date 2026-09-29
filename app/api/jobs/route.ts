@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { toIsoUtc } from "@/lib/time";
 import { deleteJob, insertJob, listJobs } from "@/lib/records";
 
 const ALLOWED_MODES = new Set(["chat", "image", "video", "audio"]);
@@ -26,7 +27,7 @@ export async function GET(request: NextRequest) {
     costSource: row.cost_source,
     status: row.status,
     result: row.result ? JSON.parse(row.result) : null,
-    createdAt: row.created_at,
+    createdAt: toIsoUtc(row.created_at),
   }));
   return NextResponse.json({ jobs });
 }
@@ -54,7 +55,9 @@ export async function POST(request: NextRequest) {
   if (!ALLOWED_MODES.has(mode)) {
     return NextResponse.json({ error: "지원하지 않는 작업 모드입니다." }, { status: 400 });
   }
-  const row = await insertJob({
+  let row;
+  try {
+    row = await insertJob({
     mode,
     model: typeof body.model === "string" ? body.model : null,
     prompt: typeof body.prompt === "string" ? body.prompt.slice(0, 10000) : null,
@@ -66,7 +69,11 @@ export async function POST(request: NextRequest) {
     costSource: body.costSource === "actual" || body.costSource === "estimated" ? body.costSource : null,
     status: typeof body.status === "string" ? body.status : "completed",
     result: body.result ?? null,
-  });
+    });
+  } catch (error) {
+    console.error("[jobs] save failed:", error);
+    return NextResponse.json({ error: error instanceof Error ? error.message : "작업 기록을 저장하지 못했습니다." }, { status: 502 });
+  }
   return NextResponse.json({ ok: true, id: row.id });
 }
 /** 라이브러리에서 결과물을 지울 때 작업 기록도 함께 지웁니다. */

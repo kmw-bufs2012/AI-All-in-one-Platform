@@ -1,6 +1,7 @@
 "use client";
 
 import { INLINE_BUDGET_CHARS } from "@/lib/inline-media";
+import { formatKst } from "@/lib/time";
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { useStudioState } from "@/components/StudioState";
@@ -754,7 +755,7 @@ export default function ChatPage() {
                           {item.title}
                         </span>
                         <span style={{ fontSize: 12, opacity: 0.6 }}>
-                          {new Date(item.updatedAt).toLocaleString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                          {formatKst(item.updatedAt, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                         </span>
                       </button>
                       <button type="button" className="secondary new-session-button" aria-label="이 대화 삭제" onClick={() => removeConversation(item.id)}>

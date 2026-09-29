@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatKst, parseUtc } from "@/lib/time";
 import { formatFileSize } from "@/components/studio-ui";
 import { extractVideoFrames, type AttachedFile } from "@/lib/client-api";
 
@@ -38,16 +39,16 @@ export interface ViewerActions {
 const PROMPT_PREVIEW_CHARS = 180;
 
 function formatDate(value: string): { date: string; time: string } {
-  const date = new Date(value.includes("T") || value.includes("Z") ? value : `${value.replace(" ", "T")}Z`);
+  const date = parseUtc(value);
   if (Number.isNaN(date.getTime())) return { date: value, time: "" };
   return {
-    date: date.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" }),
-    time: date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    date: formatKst(date, { year: "numeric", month: "long", day: "numeric" }),
+    time: `${formatKst(date, { hour: "2-digit", minute: "2-digit", second: "2-digit" })} (KST)`,
   };
 }
 
 function downloadName(asset: ViewerAsset): string {
-  const stamp = asset.createdAt.slice(0, 19).replace(/[^0-9]/g, "");
+  const stamp = formatKst(asset.createdAt, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).replace(/[^0-9]/g, "");
   return `${asset.kind}-${stamp || asset.id}.${asset.kind === "video" ? "mp4" : "png"}`;
 }
 

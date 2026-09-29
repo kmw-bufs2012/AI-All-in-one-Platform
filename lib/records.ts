@@ -10,6 +10,7 @@ import {
   type PromptRow,
 } from "@/lib/db";
 import { readJsonDoc, updateJsonDoc, usingR2 } from "@/lib/object-store";
+import { kstDateKey } from "@/lib/time";
 
 /*
  * 작업 기록(라이브러리·작업 기록 화면의 원본)과 프롬프트 저장소.
@@ -76,7 +77,7 @@ export async function listJobs(filters: { mode?: string; date?: string; model?: 
   const rows = await readJsonDoc<JobRow[]>(JOBS_KEY, []);
   return rows
     .filter((row) => !filters.mode || row.mode === filters.mode)
-    .filter((row) => !filters.date || row.created_at.slice(0, 10) === filters.date)
+    .filter((row) => !filters.date || kstDateKey(row.created_at) === filters.date)
     .filter((row) => !filters.model || row.model === filters.model)
     .sort((a, b) => b.id - a.id)
     .slice(0, filters.limit ?? 300);

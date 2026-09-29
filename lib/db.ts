@@ -157,7 +157,8 @@ export function listJobs(db: DatabaseSync, filters: { mode?: string; date?: stri
     params.push(filters.mode);
   }
   if (filters.date) {
-    clauses.push("date(created_at) = ?");
+    // 화면의 날짜 필터는 대한민국 시각(KST) 기준이므로 UTC 저장값에 9시간을 더해 비교합니다.
+    clauses.push("date(created_at, '+9 hours') = ?");
     params.push(filters.date);
   }
   if (filters.model) {

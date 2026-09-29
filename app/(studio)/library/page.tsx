@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { kstDateKey, parseUtc } from "@/lib/time";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useStudioState } from "@/components/StudioState";
@@ -241,14 +242,14 @@ export default function LibraryPage() {
         currency: null,
         model: item.model,
         prompt: item.prompt,
-        createdAt: new Date(item.savedAt - new Date().getTimezoneOffset() * 60000).toISOString(),
+        createdAt: new Date(item.savedAt).toISOString(),
         vault: item,
       });
     }
     const hiddenSet = new Set(hidden);
     return merged
       .filter((asset) => !hiddenSet.has(asset.sourceUrl))
-      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      .sort((a, b) => parseUtc(b.createdAt).getTime() - parseUtc(a.createdAt).getTime());
   }, [jobs, vaultItems, vaultUrls, hidden]);
   const counts = useMemo(() => {
     const base: Record<Filter, number> = { all: assets.length, image: 0, video: 0, audio: 0 };
@@ -260,7 +261,8 @@ export default function LibraryPage() {
     const filtered = filter === "all" ? assets : assets.filter((asset) => asset.kind === filter);
     const map = new Map<string, Asset[]>();
     for (const asset of filtered) {
-      const key = asset.createdAt.slice(0, 10);
+      // 대한민국 시각(KST) 기준 날짜로 묶습니다.
+      const key = kstDateKey(asset.createdAt);
       const list = map.get(key);
       if (list) list.push(asset);
       else map.set(key, [asset]);

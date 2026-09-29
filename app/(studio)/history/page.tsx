@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { formatKst } from "@/lib/time";
 import { Lightbox } from "@/components/studio-ui";
 
 interface JobAttachment {
@@ -165,7 +166,7 @@ export default function HistoryPage() {
             <div className="job-meta">
               <span className="mode-badge">{MODE_LABELS[job.mode] ?? job.mode}</span>
               <span>{job.model ?? "모델 정보 없음"}</span>
-              <span>{job.createdAt.replace("T", " ").slice(0, 19)}</span>
+              <span>{formatKst(job.createdAt)}</span>
               <span className={`status-badge ${job.status === "completed" ? "completed" : "failed"}`}>
                 {job.status === "completed" ? "완료" : "실패"}
               </span>
