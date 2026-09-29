@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatKst } from "@/lib/time";
 import { useRouter } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { VideoMasterPrompt } from "@/components/VideoMasterPrompt";
@@ -152,7 +153,7 @@ export default function PromptsPage() {
                 <div key={prompt.id} className="prompt-item">
                   <div className="name">{prompt.name}</div>
                   <div className="muted" style={{ fontSize: 11.5 }}>
-                    저장 시각: {prompt.updatedAt.replace("T", " ").slice(0, 19)}
+                    저장 시각: {formatKst(prompt.updatedAt)}
                   </div>
                   <div className="content">{prompt.content}</div>
                   <div className="actions">

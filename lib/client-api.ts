@@ -418,9 +418,17 @@ export function recordJob(payload: Record<string, unknown>): void {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-    // 상단 "완료된 작업" 목록이 새 작업을 바로 보여 주도록 알립니다.
-    .then(() => window.dispatchEvent(new Event("jobs:updated")))
-    .catch(() => {});
+    .then(async (response) => {
+      if (!response.ok) {
+        // 저장 실패를 조용히 넘기면 "완료된 작업"·작업 기록이 비어 보이는 이유를 알 수 없으므로 알립니다.
+        const body = await response.json().catch(() => ({}));
+        window.dispatchEvent(new CustomEvent("jobs:error", { detail: body.error || `작업 기록 저장 실패 (HTTP ${response.status})` }));
+        return;
+      }
+      // 상단 "완료된 작업" 목록이 새 작업을 바로 보여 주도록 알립니다.
+      window.dispatchEvent(new Event("jobs:updated"));
+    })
+    .catch(() => window.dispatchEvent(new CustomEvent("jobs:error", { detail: "작업 기록 저장 요청을 보내지 못했습니다." })));
   autoSaveToVault(payload);
 }
 

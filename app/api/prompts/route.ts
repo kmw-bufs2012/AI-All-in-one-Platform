@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { toIsoUtc } from "@/lib/time";
 import { insertPrompt, listPrompts } from "@/lib/records";
 
 export async function GET() {
@@ -6,8 +7,8 @@ export async function GET() {
     id: row.id,
     name: row.name,
     content: row.content,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: toIsoUtc(row.created_at),
+    updatedAt: toIsoUtc(row.updated_at),
   }));
   return NextResponse.json({ prompts });
 }

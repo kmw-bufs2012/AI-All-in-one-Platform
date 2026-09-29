@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatKst } from "@/lib/time";
 import { useRouter } from "next/navigation";
 import { Icon, type IconName } from "./Icon";
 import { useStudioState } from "./StudioState";
@@ -46,9 +47,7 @@ function writeDismissed(ids: number[]) {
 }
 
 function formatWhen(value: string): string {
-  const date = new Date(value.includes("T") || value.includes("Z") ? value : `${value.replace(" ", "T")}Z`);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("ko-KR", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return formatKst(value, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 export function CompletedJobs() {

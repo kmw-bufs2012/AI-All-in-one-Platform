@@ -318,6 +318,8 @@ async function readJsonWithEtag<T>(key: string): Promise<{ data: T | null; etag:
   return { data: text ? (JSON.parse(text) as T) : null, etag: response.headers.get("etag") };
 }
 
+let conditionalWritesSupported = true;
+
 async function writeJsonConditional(key: string, data: unknown, etag: string | null): Promise<boolean> {
   const config = r2Config();
   const bytes = Buffer.from(JSON.stringify(data));
@@ -329,9 +331,22 @@ async function writeJsonConditional(key: string, data: unknown, etag: string | n
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (etag) headers["If-Match"] = etag;
   else headers["If-None-Match"] = "*";
+  if (!conditionalWritesSupported) {
+    await putObject(key, bytes, "application/json");
+    return true;
+  }
   const signed = await config.client.sign(objectUrl(config, key), { method: "PUT", body, headers });
   const response = await fetch(signed.url, { method: "PUT", headers: signed.headers, body });
   if (response.status === 412) return false;
+  // 조건부 쓰기를 지원하지 않는 S3 호환 저장소면(501·NotImplemented 등) 일반 쓰기로 대신합니다.
+  if (response.status === 501 || response.status === 400) {
+    const text = await response.clone().text().catch(() => "");
+    if (response.status === 501 || /NotImplemented|InvalidArgument|InvalidRequest/.test(text)) {
+      conditionalWritesSupported = false;
+      await putObject(key, bytes, "application/json");
+      return true;
+    }
+  }
   if (!response.ok) throw await r2Error("저장", response);
   return true;
 }
