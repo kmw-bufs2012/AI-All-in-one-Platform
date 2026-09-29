@@ -52,7 +52,16 @@ export interface VoiceInfo {
 export interface ExtraParam {
   /** NanoGPT에 보낼 때 쓰는 원래 파라미터 이름(예: aspect_ratio, quality, style, duration). */
   key: string;
-  kind: "enum" | "range";
+  /**
+   * enum: 선택 목록 · range: 슬라이더 · text: 자유 입력(URL 목록·JSON 등) · number: 숫자 입력(범위 미공개).
+   */
+  kind: "enum" | "range" | "text" | "number";
+  /** 카탈로그가 붙인 표시 이름(예: "Reference Videos (T2V)"). 한국어 라벨이 없을 때 씁니다. */
+  label?: string;
+  /** 카탈로그의 설정 설명. */
+  description?: string;
+  /** 선택지별 카탈로그 표시 이름(예: "16:9" → "Landscape (16:9)"). */
+  valueLabels?: Record<string, string>;
   /** enum일 때 고를 수 있는 값 목록. */
   values?: string[];
   /** range이거나, 값이 전부 숫자인 enum일 때 슬라이더로 보여주기 위한 범위. */
@@ -84,6 +93,19 @@ export function filterSupportedParamValues(
     if (param.values && param.values.length > 0) {
       const matched = param.values.find((candidate) => candidate === String(value));
       if (matched !== undefined) result[param.key] = matched;
+      continue;
+    }
+    if (param.kind === "text") {
+      if (typeof value === "string" && value.trim()) result[param.key] = value.slice(0, 4000);
+      continue;
+    }
+    if (param.kind === "number") {
+      const numeric = typeof value === "number" ? value : Number(value);
+      if (Number.isFinite(numeric)
+        && (param.min === undefined || numeric >= param.min)
+        && (param.max === undefined || numeric <= param.max)) {
+        result[param.key] = numeric;
+      }
       continue;
     }
     if (param.kind === "range" && typeof value === "number") {
@@ -226,6 +248,18 @@ function asStringArray(value: unknown): string[] {
   return out;
 }
 
+function optionLabels(value: unknown): Record<string, string> {
+  const labels: Record<string, string> = {};
+  if (!Array.isArray(value)) return labels;
+  for (const entry of value) {
+    const record = asRecord(entry);
+    const option = record.value;
+    const label = asString(record.label);
+    if ((typeof option === "string" || typeof option === "number") && label) labels[String(option)] = label;
+  }
+  return labels;
+}
+
 function optionValues(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const out: string[] = [];
@@ -334,6 +368,9 @@ function hasParam(params: SupportedParams, ...keys: string[]): boolean {
  * 필드로 뽑아 쓰는 파라미터를 뺀 나머지를 그대로 노출합니다. supported_parameters
  * 가 문자열 배열(값 정의 없음)로만 온 경우는 컨트롤을 만들 수 없어 건너뜁니다.
  */
+/* 화면에 전용 컨트롤이 따로 있는 설정(프롬프트·시드·네거티브 프롬프트)은 일반 설정 목록에서 뺍니다. */
+const DEDICATED_KEYS = new Set(["prompt", "seed", "negative_prompt"]);
+
 function extractExtraParams(params: SupportedParams, excludeKeys: Set<string>): ExtraParam[] {
   const result: ExtraParam[] = [];
   for (const [lowerKey, def] of Object.entries(params.defs)) {
@@ -382,7 +419,34 @@ function extractExtraParams(params: SupportedParams, excludeKeys: Set<string>): 
       } else {
         result.push({ key, kind: "enum", values, default: defaultValue });
       }
+      continue;
     }
+    if (DEDICATED_KEYS.has(lowerKey)) continue;
+    // 범위 없이 숫자만 받는 설정(예: cfg_scale, guidance_scale)은 숫자 입력칸으로.
+    if (declaredType === "number" || declaredType === "integer") {
+      result.push({
+        key,
+        kind: "number",
+        min: min ?? undefined,
+        max: max ?? undefined,
+        step: step ?? (declaredType === "integer" ? 1 : undefined),
+        default: defaultValue,
+      });
+      continue;
+    }
+    // URL 목록·JSON·문구처럼 자유롭게 적는 설정.
+    if (declaredType === "text" || declaredType === "string" || declaredType === "textarea") {
+      result.push({ key, kind: "text", default: typeof def.default === "string" && def.default ? def.default : null });
+    }
+  }
+  // 카탈로그의 표시 이름·설명·선택지 이름을 붙입니다.
+  for (const param of result) {
+    const def = params.defs[param.key.toLowerCase()];
+    if (!def) continue;
+    param.label ??= asString(def.label) || undefined;
+    param.description ??= asString(def.description) || undefined;
+    const labels = optionLabels(def.values ?? def.enum ?? def.options);
+    if (Object.keys(labels).length > 0) param.valueLabels ??= labels;
   }
   return result;
 }
@@ -633,7 +697,19 @@ export function normalizeModel(rawInput: unknown, kind: ModelKind): NormalizedMo
   // 카탈로그가 공개하지 않은 설정은 제작사 공식 문서로 확인한 값으로 보강합니다
   // (lib/image-settings-overlay.ts).
   const imageOverlay = kind === "image" ? findImageSettingsOverlay(id, name) : null;
-  const imageParams = kind === "image" ? mergeOfficialImageParams(extractExtraParams(params, imageExclude), imageOverlay) : [];
+  // LoRA: 카탈로그가 supported_parameters.loras.url_fields(예: lora_url_1~3)로 공개하면
+  // 주소 입력칸과 가중치(scale) 입력칸을 짝지어 보여 줍니다.
+  const loraSpec = asRecord(spRecord.loras);
+  const loraFields = asStringArray(loraSpec.url_fields ?? loraSpec.urlFields);
+  const loraParams: ExtraParam[] = kind === "image"
+    ? loraFields.flatMap((field, index) => [
+        { key: field, kind: "text" as const, label: `LoRA ${index + 1} 주소`, description: "LoRA 가중치 파일의 HTTPS 주소", default: null },
+        { key: field.replace(/url/i, "scale"), kind: "number" as const, label: `LoRA ${index + 1} 강도`, min: 0, max: 2, step: 0.05, default: null },
+      ])
+    : [];
+  const imageParams = kind === "image"
+    ? [...mergeOfficialImageParams(extractExtraParams(params, new Set([...imageExclude, "loras"])), imageOverlay), ...loraParams]
+    : [];
 
   /*
    * 동영상 생성 입력(시작 이미지) 판정.

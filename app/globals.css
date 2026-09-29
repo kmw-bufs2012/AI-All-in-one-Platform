@@ -3069,3 +3069,17 @@ button.new-session-button {
 .storage-notice.warn .storage-notice-dot { background: #f59e0b; }
 .storage-notice.error { color: var(--danger); background: var(--danger-soft); }
 .storage-notice.error .storage-notice-dot { background: var(--danger); }
+
+/* 상세 설정: 자유 입력·숫자 입력 */
+.param-row-wide { grid-column: 1 / -1; }
+.param-text {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+textarea.param-text { resize: vertical; min-height: 60px; }

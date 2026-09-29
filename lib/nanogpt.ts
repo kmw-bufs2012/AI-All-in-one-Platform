@@ -218,7 +218,7 @@ export function sanitizeExtraParams(
     if (value === "true" || value === "false") {
       // 켜기/끄기 설정(예: generateAudio)은 문자열이 아니라 불리언으로 보냅니다.
       result[key] = value === "true";
-    } else if (typeof value === "string" && value.length > 0 && value.length <= 500) {
+    } else if (typeof value === "string" && value.length > 0 && value.length <= 4000) {
       result[key] = value;
     } else if (typeof value === "number" && Number.isFinite(value)) {
       const bounds = NUMERIC_PARAM_BOUNDS[key.toLowerCase()];

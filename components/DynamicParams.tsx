@@ -77,17 +77,72 @@ function ParamControl({
   value: string | number | undefined;
   onChange: (value: string | number | undefined) => void;
 }) {
+  // 한국어 라벨이 없으면 카탈로그의 표시 이름을 씁니다.
+  const koLabel = paramKeyLabel(param.key);
+  const shownLabel = koLabel !== param.key ? koLabel : param.label ?? param.key;
   const label = (
     <>
-      {paramKeyLabel(param.key)}
+      {shownLabel}
       {param.origin === "official" ? (
         <span className="param-official" title="NanoGPT 카탈로그에는 없지만 제작사 공식 문서로 확인한 설정입니다">
           공식 문서
         </span>
       ) : null}
       {param.note ? <span className="param-note">{param.note}</span> : null}
+      {!param.note && param.description ? <span className="param-note">{param.description}</span> : null}
     </>
   );
+
+  if (param.kind === "text") {
+    const multiline = /json|array|one url per line|list|prompt/i.test(`${param.description ?? ""} ${param.key}`);
+    const current = typeof value === "string" ? value : "";
+    return (
+      <label className="param-row param-row-wide">
+        <span className="param-label">{label}</span>
+        {multiline ? (
+          <textarea
+            className="param-text"
+            rows={3}
+            value={current}
+            placeholder={param.default ? String(param.default) : "비워 두면 모델 기본값"}
+            onChange={(event) => onChange(event.target.value || undefined)}
+          />
+        ) : (
+          <input
+            className="param-text"
+            type="text"
+            value={current}
+            placeholder={param.default ? String(param.default) : "비워 두면 모델 기본값"}
+            onChange={(event) => onChange(event.target.value || undefined)}
+          />
+        )}
+      </label>
+    );
+  }
+
+  if (param.kind === "number") {
+    const current = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
+    return (
+      <label className="param-row">
+        <span className="param-label">{label}</span>
+        <input
+          className="param-text"
+          type="number"
+          min={param.min}
+          max={param.max}
+          step={param.step ?? "any"}
+          value={current}
+          placeholder={param.default !== null && param.default !== undefined ? String(param.default) : "모델 기본값"}
+          onChange={(event) => {
+            const raw = event.target.value;
+            if (raw === "") return onChange(undefined);
+            const numeric = Number(raw);
+            onChange(Number.isFinite(numeric) ? numeric : undefined);
+          }}
+        />
+      </label>
+    );
+  }
 
   if (param.kind === "range" && param.min !== undefined && param.max !== undefined) {
     // 값이 전부 숫자인 enum(예: duration "5"/"10")도 여기서 슬라이더로 그립니다.
@@ -143,7 +198,7 @@ function ParamControl({
           <option value="">모델 기본값</option>
           {param.values.map((item) => (
             <option key={item} value={item}>
-              {paramValueLabel(param.key, item)}
+              {paramValueLabel(param.key, item) !== item ? paramValueLabel(param.key, item) : param.valueLabels?.[item] ?? item}
             </option>
           ))}
         </select>
