@@ -83,7 +83,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[chats] save failed:", error);
-    return NextResponse.json({ error: "Cloudflare R2 에 대화 기록을 저장하지 못했습니다." }, { status: 502 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Cloudflare R2 에 대화 기록을 저장하지 못했습니다." }, { status: 502 });
   }
 }
 

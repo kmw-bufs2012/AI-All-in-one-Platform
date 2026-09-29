@@ -34,10 +34,11 @@ let cachedConfig: R2Config | null | undefined;
 
 function r2Config(): R2Config | null {
   if (cachedConfig !== undefined) return cachedConfig;
-  const accountId = process.env.R2_ACCOUNT_ID;
-  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
-  const bucket = process.env.R2_BUCKET;
+  // 복사·붙여넣기로 앞뒤 공백·줄바꿈이 섞이면 서명이 틀려 403 이 나므로 잘라 냅니다.
+  const accountId = process.env.R2_ACCOUNT_ID?.trim();
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID?.trim();
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY?.trim();
+  const bucket = process.env.R2_BUCKET?.trim();
   if (!accountId || !accessKeyId || !secretAccessKey || !bucket) {
     cachedConfig = null;
     return null;
@@ -45,9 +46,32 @@ function r2Config(): R2Config | null {
   cachedConfig = {
     client: new AwsClient({ accessKeyId, secretAccessKey, service: "s3", region: "auto" }),
     // R2_ENDPOINT 로 다른 S3 호환 주소(관할 구역별 엔드포인트, 테스트 서버 등)를 지정할 수 있습니다.
-    endpoint: `${(process.env.R2_ENDPOINT || `https://${accountId}.r2.cloudflarestorage.com`).replace(/\/+$/, "")}/${bucket}`,
+    endpoint: `${(process.env.R2_ENDPOINT?.trim() || `https://${accountId}.r2.cloudflarestorage.com`).replace(/\/+$/, "")}/${bucket}`,
   };
   return cachedConfig;
+}
+
+/*
+ * R2 오류 응답(XML)의 Code·Message 를 꺼내 원인을 알 수 있게 합니다.
+ * 예: SignatureDoesNotMatch(비밀 키 오류), InvalidAccessKeyId(액세스 키 오류),
+ *     AccessDenied(토큰 권한·버킷 범위 부족), NoSuchBucket(버킷 이름 오류).
+ */
+const R2_HINTS: Record<string, string> = {
+  SignatureDoesNotMatch: "R2_SECRET_ACCESS_KEY 값이 틀렸습니다(다른 토큰의 값이거나 일부만 복사됨)",
+  InvalidAccessKeyId: "R2_ACCESS_KEY_ID 값이 틀렸거나, 토큰이 삭제되었습니다",
+  AccessDenied: "API 토큰 권한이 부족합니다. 'Object Read & Write' 권한과 이 버킷이 포함된 토큰인지 확인하세요",
+  NoSuchBucket: "R2_BUCKET 이름의 버킷이 없습니다(이름 오타 또는 EU 관할 구역 버킷이면 R2_ENDPOINT 필요)",
+  InvalidBucketName: "R2_BUCKET 이름 형식이 올바르지 않습니다",
+  Unauthorized: "인증에 실패했습니다. R2_ACCOUNT_ID·액세스 키가 같은 계정의 값인지 확인하세요",
+};
+
+async function r2Error(action: string, response: Response): Promise<Error> {
+  const text = await response.text().catch(() => "");
+  const code = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? "";
+  const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1] ?? "";
+  const hint = R2_HINTS[code];
+  const detail = [code, hint ?? message].filter(Boolean).join(": ");
+  return new Error(`Cloudflare R2 ${action}에 실패했습니다. (HTTP ${response.status}${detail ? ` · ${detail}` : ""})`);
 }
 
 export function usingR2(): boolean {
@@ -55,7 +79,10 @@ export function usingR2(): boolean {
 }
 
 function objectUrl(config: R2Config, key: string): string {
-  return `${config.endpoint}/${key.split("/").map(encodeURIComponent).join("/")}`;
+  // 서명(aws4fetch)과 같은 RFC 3986 규칙으로 인코딩해 ( ) ! * ' 가 든 파일명도 서명이 어긋나지 않게 합니다.
+  const encode = (part: string) =>
+    encodeURIComponent(part).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${config.endpoint}/${key.split("/").map(encode).join("/")}`;
 }
 
 function safeKey(key: string): string | null {
@@ -82,9 +109,7 @@ export async function putObject(key: string, body: Buffer | Uint8Array, mime: st
       headers: { "Content-Type": mime },
     });
     const response = await fetch(signed.url, { method: "PUT", headers: signed.headers, body: bytes });
-    if (!response.ok) {
-      throw new Error(`Cloudflare R2 저장에 실패했습니다. (HTTP ${response.status})`);
-    }
+    if (!response.ok) throw await r2Error("저장", response);
     return;
   }
   const target = localPath(clean);
@@ -113,7 +138,7 @@ export async function getObject(key: string, range?: string | null): Promise<Sto
     });
     if (response.status === 404) return null;
     if (!response.ok || !response.body) {
-      throw new Error(`Cloudflare R2 읽기에 실패했습니다. (HTTP ${response.status})`);
+      throw await r2Error("읽기", response);
     }
     const length = response.headers.get("content-length");
     return {
@@ -147,7 +172,7 @@ export async function listKeys(prefix: string): Promise<string[]> {
   if (config) {
     const url = `${config.endpoint}?list-type=2&prefix=${encodeURIComponent(prefix)}&max-keys=1000`;
     const response = await config.client.fetch(url, { method: "GET" });
-    if (!response.ok) throw new Error(`Cloudflare R2 목록 조회에 실패했습니다. (HTTP ${response.status})`);
+    if (!response.ok) throw await r2Error("목록 조회", response);
     const xml = await response.text();
     return Array.from(xml.matchAll(/<Key>([\s\S]*?)<\/Key>/g)).map((match) =>
       match[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'"),
@@ -212,4 +237,21 @@ export async function findAttachment(id: string): Promise<{ key: string; name: s
   if (!key) return null;
   const name = key.slice(key.lastIndexOf("/") + 1);
   return { key, name, mime: mimeFromPath(name) };
+}
+
+/** 설정 점검: 버킷 목록을 1개만 조회해 인증·권한·버킷 이름이 맞는지 확인합니다. */
+export async function checkR2(): Promise<{ enabled: boolean; ok: boolean; detail: string; endpointHost: string | null }> {
+  const config = r2Config();
+  if (!config) return { enabled: false, ok: false, detail: "R2 환경 변수 4개 중 하나 이상이 비어 있습니다.", endpointHost: null };
+  const endpointHost = new URL(config.endpoint).host;
+  try {
+    const response = await config.client.fetch(`${config.endpoint}?list-type=2&max-keys=1`, { method: "GET" });
+    if (!response.ok) return { enabled: true, ok: false, detail: (await r2Error("점검", response)).message, endpointHost };
+    const probeKey = `healthcheck/${Date.now()}.txt`;
+    await putObject(probeKey, Buffer.from("ok"), "text/plain");
+    await deleteObject(probeKey);
+    return { enabled: true, ok: true, detail: "읽기·쓰기 모두 정상입니다.", endpointHost };
+  } catch (error) {
+    return { enabled: true, ok: false, detail: error instanceof Error ? error.message : String(error), endpointHost };
+  }
 }
