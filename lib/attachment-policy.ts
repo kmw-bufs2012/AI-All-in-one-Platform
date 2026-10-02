@@ -65,7 +65,7 @@ export interface ChatAttachmentPolicy {
   videoNative: boolean;
   /** 프레임 추출 방식일 때 동영상 1개에서 뽑는 프레임 수. */
   frameCount: number;
-  /** capabilities.pdf_upload. false면 PDF 대신 텍스트 문서만 첨부할 수 있습니다. */
+  /** capabilities.pdf_upload. true면 PDF를 파일 그대로, false면 글자만 뽑아 보냅니다. */
   pdfAllowed: boolean;
   /** 문서 첨부 input 의 accept 값. */
   docAccept: string;
@@ -83,6 +83,9 @@ export interface ChatAttachmentPolicy {
  * 첨부되는 모델까지 버튼이 잠깁니다. 지원하지 않는 모델에 첨부를 보내면 API가
  * 오류를 돌려주므로 사용자가 원인을 알 수 있지만, 버튼이 잠기면 알 방법이 없습니다.
  */
+/* 문서는 서버에서 본문 텍스트를 뽑아 보내므로 모든 채팅 모델에 같은 형식을 허용합니다. */
+const DOC_ACCEPT = ".txt,.md,.pdf,.docx,.pptx,.hwp,.hwpx,text/plain,text/markdown,application/pdf";
+
 export function resolveChatAttachmentPolicy(model: NormalizedModel | null): ChatAttachmentPolicy {
   if (!model) {
     return {
@@ -93,7 +96,7 @@ export function resolveChatAttachmentPolicy(model: NormalizedModel | null): Chat
       videoNative: false,
       frameCount: VIDEO_FRAME_COUNT,
       pdfAllowed: true,
-      docAccept: ".pdf,.txt,.md,text/plain,text/markdown,application/pdf",
+      docAccept: DOC_ACCEPT,
       totalBytes: APP_CAP_TOTAL_BYTES,
       family: null,
       note: null,
@@ -120,7 +123,7 @@ export function resolveChatAttachmentPolicy(model: NormalizedModel | null): Chat
   const notes: string[] = [];
   if (!vision) notes.push("이미지를 인식하지 못하는 모델입니다");
   if (!nativeVideo && vision) notes.push("동영상은 프레임을 뽑아 이미지로 전달하며, 프레임도 이미지 개수에 포함됩니다");
-  if (!pdf) notes.push("PDF를 지원하지 않아 텍스트 문서(txt·md)만 첨부할 수 있습니다");
+  if (!pdf) notes.push("PDF는 글자만 뽑아 전달합니다(표·그림 제외)");
   notes.push(
     official
       ? `${official.family} 공식 한도 기준 · 요청당 총 ${Math.round(totalBytes / 1024 / 1024)}MB`
@@ -135,7 +138,7 @@ export function resolveChatAttachmentPolicy(model: NormalizedModel | null): Chat
     videoNative: nativeVideo,
     frameCount: VIDEO_FRAME_COUNT,
     pdfAllowed: pdf,
-    docAccept: pdf ? ".pdf,.txt,.md,text/plain,text/markdown,application/pdf" : ".txt,.md,text/plain,text/markdown",
+    docAccept: DOC_ACCEPT,
     totalBytes,
     family: official?.family ?? null,
     note: `${notes.join(" · ")}.`,
