@@ -8,15 +8,17 @@ import {
   MAX_DOCS,
 } from "@/lib/attachments";
 import { findAttachment, getObjectBuffer } from "@/lib/object-store";
+import { docFormat, extractDocumentText } from "@/lib/doc-extract";
 
 // Vercel Hobby(Fluid compute) 함수 최대 실행 시간은 300초입니다.
 export const maxDuration = 300;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/* 텍스트 문서는 파일 파트 대신 본문에 그대로 붙여 넣습니다. PDF만 파일 파트로
- * 보내며, 그마저도 capabilities.pdf_upload 가 true인 모델에서만 허용됩니다. */
-const MAX_INLINE_DOC_CHARS = 20000;
+/* 문서(txt·md·Word·PowerPoint·한글)는 본문 텍스트를 뽑아 메시지에 붙여 넣습니다.
+ * PDF는 capabilities.pdf_upload 가 true인 모델에는 파일 파트로, 아닌 모델에는
+ * 텍스트를 뽑아 보냅니다(lib/doc-extract.ts). */
+const MAX_INLINE_DOC_CHARS = 60000;
 
 interface OutgoingPart {
   type: string;
@@ -201,17 +203,34 @@ export async function POST(request: NextRequest) {
   for (const id of docIds) {
     const file = await resolveAttachmentFile(id);
     if (!file) continue;
-    if (file.mime === "application/pdf") {
-      // PDF는 capabilities.pdf_upload 를 지원하는 모델에만 파일 파트로 보냅니다.
-      if (!pdfAllowed) continue;
+    const format = docFormat(file.name, file.mime);
+    if (format === "pdf" && pdfAllowed) {
       parts.push({
         type: "file",
-        file: { file_data: await toDataUrl(file.key, file.mime), filename: file.name },
+        file: { file_data: await toDataUrl(file.key, "application/pdf"), filename: file.name },
       });
       continue;
     }
-    const text = (await readAttachment(file.key)).toString("utf8").slice(0, MAX_INLINE_DOC_CHARS);
-    parts.push({ type: "text", text: `첨부 문서 «${file.name}»\n\n${text}` });
+    let text: string;
+    try {
+      text = (await extractDocumentText(await readAttachment(file.key), file.name, file.mime)).trim();
+    } catch (error) {
+      return NextResponse.json(
+        { error: `«${file.name}»: ${error instanceof Error ? error.message : "문서 내용을 읽지 못했습니다."}` },
+        { status: 422 },
+      );
+    }
+    if (!text) {
+      return NextResponse.json(
+        { error: `«${file.name}»에서 글자를 찾지 못했습니다. 스캔한 이미지 문서라면 이미지로 첨부해 주세요.` },
+        { status: 422 },
+      );
+    }
+    const clipped = text.length > MAX_INLINE_DOC_CHARS;
+    parts.push({
+      type: "text",
+      text: `첨부 문서 «${file.name}»${clipped ? ` (앞부분 ${MAX_INLINE_DOC_CHARS.toLocaleString("ko-KR")}자만 전달)` : ""}\n\n${text.slice(0, MAX_INLINE_DOC_CHARS)}`,
+    });
   }
   if (parts.length === 0) {
     return NextResponse.json({ error: "전송할 메시지 내용이 없습니다." }, { status: 400 });

@@ -29,7 +29,17 @@ export const DOC_MIME_TYPES = new Set([
   "text/plain",
   "text/markdown",
   "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/x-hwp",
+  "application/haansofthwp",
+  "application/vnd.hancom.hwp",
+  "application/hwp+zip",
+  "application/vnd.hancom.hwpx",
 ]);
+
+/** 채팅에 첨부할 수 있는 문서 확장자. 본문 텍스트를 뽑아 보냅니다(lib/doc-extract.ts). */
+export const DOC_EXTENSIONS = new Set([".txt", ".md", ".pdf", ".docx", ".pptx", ".hwp", ".hwpx"]);
 
 export const AUDIO_MIME_TYPES = new Set([
   "audio/mpeg",
@@ -61,7 +71,7 @@ export function kindFromFile(name: string, mime: string): AttachmentKind | null 
   if (VIDEO_MIME_TYPES.has(lower) || lower.startsWith("video/")) return "video";
   if (AUDIO_MIME_TYPES.has(lower) || lower.startsWith("audio/")) return "audio";
   const extension = path.extname(name).toLowerCase();
-  if (DOC_MIME_TYPES.has(lower) || extension === ".txt" || extension === ".md" || extension === ".pdf") return "doc";
+  if (DOC_MIME_TYPES.has(lower) || DOC_EXTENSIONS.has(extension)) return "doc";
   return null;
 }
 

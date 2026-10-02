@@ -361,9 +361,9 @@ export default function ChatPage() {
       setError(`문서는 최대 ${policy.doc.max}개까지 첨부할 수 있습니다.`);
       return;
     }
-    // PDF는 capabilities.pdf_upload 를 공개한 모델에서만 그대로 전달됩니다.
-    if (!policy.pdfAllowed && files.some((file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf")) {
-      setError("이 모델은 PDF를 지원하지 않습니다. 텍스트 문서(txt·md)를 첨부해 주세요.");
+    // 옛 바이너리 형식(.doc·.ppt)은 글자를 뽑을 수 없습니다.
+    if (files.some((file) => /\.(doc|ppt)$/i.test(file.name))) {
+      setError("옛 형식(.doc·.ppt)은 지원하지 않습니다. .docx·.pptx 로 저장해 첨부해 주세요.");
       return;
     }
     try {
@@ -924,7 +924,7 @@ export default function ChatPage() {
               multiple
               disabled={!policy.doc.allowed || compressingVideo}
               onPick={pickDoc}
-              title={policy.pdfAllowed ? "문서 첨부 (txt·md·pdf)" : "문서 첨부 (txt·md)"}
+              title={policy.pdfAllowed ? "문서 첨부 (Word·PowerPoint·한글·PDF·txt·md)" : "문서 첨부 (Word·PowerPoint·한글·PDF·txt·md — PDF는 글자만 전달)"}
             />
             <span className="dock-spacer" />
             {policy.note ? (
